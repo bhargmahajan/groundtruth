@@ -1,0 +1,36 @@
+{
+  "name": "groundtruth",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@google/genai": "^2.30.0",
+    "@supabase/supabase-js": "^2.118.0",
+    "@types/suncalc": "^1.9.2",
+    "@upstash/qstash": "^2.12.0",
+    "@upstash/redis": "^1.39.0",
+    "h3-js": "^4.5.0",
+    "maplibre-gl": "^6.14.0",
+    "next": "16.4.2",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "suncalc": "^2.1.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/turbopack": "^4",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.2",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vitest": "^5.0.5"
+  }
+}
