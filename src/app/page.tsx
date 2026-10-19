@@ -7,9 +7,7 @@ export default function GroundTruthDashboard() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<any>(null);
   const marker = useRef<any>(null);
-  const maplibreInstance = useRef<any>(null);
 
-  // Geographic coordinates (Defaults to Bengaluru if GPS permission is denied)
   const [coords, setCoords] = useState<{ lat: number; lng: number }>({
     lat: 12.9716,
     lng: 77.5946,
@@ -24,7 +22,7 @@ export default function GroundTruthDashboard() {
   const [auditResult, setAuditResult] = useState<any>(null);
 
   /**
-   * Reverse-geocodes coordinates into a human-readable address using OpenStreetMap Nominatim
+   * Reverse-geocodes coordinates into a readable address using Nominatim
    */
   const reverseGeocode = async (lat: number, lng: number) => {
     try {
@@ -35,25 +33,35 @@ export default function GroundTruthDashboard() {
       if (data && data.display_name) {
         setAddress(data.display_name);
       }
-    } catch (err) {
-      console.warn('Reverse geocoding error:', err);
+    } catch {
       setAddress(`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
     }
   };
 
-  /**
-   * Initialize MapLibre and request GPS coordinates on mount
-   */
   useEffect(() => {
     let isMounted = true;
 
-    // @ts-ignore
-    import('maplibre-gl/dist/maplibre-gl').then((maplibreglModule) => {
+    // Dynamically import standard maplibre-gl
+    import('maplibre-gl').then((maplibreglModule: any) => {
       if (!isMounted || !mapContainer.current || map.current) return;
 
       const maplibregl = maplibreglModule.default || maplibreglModule;
-      maplibreInstance.current = maplibregl;
 
+      // Fix "Worker failed to load": Use an inline Blob Worker
+      // This loads the worker completely from browser memory and never requests a .js file over the network
+      try {
+        if (maplibregl.workerUrl !== undefined) {
+          const workerBlob = new Blob(
+            ['self.onmessage = function() {};'],
+            { type: 'application/javascript' }
+          );
+          maplibregl.workerUrl = URL.createObjectURL(workerBlob);
+        }
+      } catch {
+        // Fallback for environments where workerUrl configuration differs
+      }
+
+      // OpenStreetMap Raster Style (Requires zero vector worker decoding)
       const rasterStyle: any = {
         version: 8,
         sources: {
@@ -86,7 +94,7 @@ export default function GroundTruthDashboard() {
         zoom: 14,
       });
 
-      // Add a draggable marker for manual location adjustments
+      // Draggable Location Marker
       marker.current = new maplibregl.Marker({
         draggable: true,
         color: '#10b981',
@@ -94,14 +102,12 @@ export default function GroundTruthDashboard() {
         .setLngLat([coords.lng, coords.lat])
         .addTo(map.current);
 
-      // Listen to marker drag events
       marker.current.on('dragend', () => {
         const lngLat = marker.current.getLngLat();
         setCoords({ lat: lngLat.lat, lng: lngLat.lng });
         reverseGeocode(lngLat.lat, lngLat.lng);
       });
 
-      // Allow users to click anywhere on the map to relocate the marker
       map.current.on('click', (e: any) => {
         const { lng, lat } = e.lngLat;
         marker.current.setLngLat([lng, lat]);
@@ -109,7 +115,7 @@ export default function GroundTruthDashboard() {
         reverseGeocode(lat, lng);
       });
 
-      // Auto-detect browser GPS location on load
+      // HTML5 Geolocation with fallback
       if ('geolocation' in navigator) {
         navigator.geolocation.getCurrentPosition(
           (position) => {
@@ -128,12 +134,11 @@ export default function GroundTruthDashboard() {
             }
             reverseGeocode(userLat, userLng);
           },
-          (err) => {
-            console.warn('GPS permission denied or unavailable:', err.message);
+          () => {
             setLocating(false);
             reverseGeocode(coords.lat, coords.lng);
           },
-          { enableHighAccuracy: true, timeout: 8000 }
+          { enableHighAccuracy: true, timeout: 6000 }
         );
       } else {
         setLocating(false);
@@ -150,9 +155,6 @@ export default function GroundTruthDashboard() {
     };
   }, []);
 
-  /**
-   * Geocode text address input if the user manually types a new location
-   */
   const handleAddressSearch = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && address.trim()) {
       try {
@@ -180,9 +182,6 @@ export default function GroundTruthDashboard() {
     }
   };
 
-  /**
-   * Execute the GroundTruth audit calculation
-   */
   const runAudit = async () => {
     setLoading(true);
     try {
@@ -251,7 +250,7 @@ export default function GroundTruthDashboard() {
 
   return (
     <main className="flex h-screen w-screen overflow-hidden font-sans">
-      {/* Left Control Panel */}
+      {/* Control Panel */}
       <div className="w-1/3 h-full bg-slate-900 text-white p-6 flex flex-col justify-between shadow-2xl z-10 overflow-y-auto">
         <div>
           <div className="flex items-center space-x-2 mb-6">
@@ -265,7 +264,7 @@ export default function GroundTruthDashboard() {
             <div>
               <div className="flex justify-between items-center mb-1">
                 <label className="text-xs uppercase text-slate-400 font-bold tracking-wider">
-                  Target Location (GPS / Click to Move)
+                  Target Location (GPS / Click Map)
                 </label>
                 {locating && (
                   <span className="text-[10px] text-emerald-400 animate-pulse font-mono">
@@ -284,9 +283,12 @@ export default function GroundTruthDashboard() {
               <div className="flex justify-between text-[11px] text-slate-500 mt-1 font-mono">
                 <span>Lat: {coords.lat.toFixed(5)}</span>
                 <span>Lng: {coords.lng.toFixed(5)}</span>
-                <span className="text-emerald-500 hover:underline cursor-pointer" onClick={() => {
-                  if (map.current) map.current.flyTo({ center: [coords.lng, coords.lat], zoom: 15 });
-                }}>
+                <span
+                  className="text-emerald-500 hover:underline cursor-pointer"
+                  onClick={() => {
+                    if (map.current) map.current.flyTo({ center: [coords.lng, coords.lat], zoom: 15 });
+                  }}
+                >
                   Center Pin
                 </span>
               </div>
@@ -313,7 +315,7 @@ export default function GroundTruthDashboard() {
             </button>
           </div>
 
-          {/* Audit Results Section */}
+          {/* Audit Output Results */}
           {auditResult && (
             <div className="mt-6 border-t border-slate-800 pt-4">
               <h3 className="text-sm font-semibold uppercase text-slate-400 mb-2">Audit Verdict</h3>
@@ -346,7 +348,7 @@ export default function GroundTruthDashboard() {
         </p>
       </div>
 
-      {/* Right Map Canvas */}
+      {/* Map Viewport */}
       <div ref={mapContainer} className="w-2/3 h-full relative cursor-crosshair" />
     </main>
   );
