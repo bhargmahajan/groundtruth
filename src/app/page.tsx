@@ -88,7 +88,7 @@ export default function GroundTruthDashboard() {
     }
   };
 
-  // Dedicated persistent marker creation
+  // Persistent Target Pin
   const updateTargetMarkerPosition = (lng: number, lat: number) => {
     if (!map.current) return;
     const maplibregl = maplibreglRef.current;
@@ -254,7 +254,7 @@ export default function GroundTruthDashboard() {
   };
 
   /**
-   * Renders color-coded amenity markers including temples, masjids, and churches
+   * Places every amenity reported on the map and binds distance tooltips
    */
   const renderAmenityPins = (points: any[]) => {
     amenityMarkersRef.current.forEach((m) => m.remove());
@@ -314,14 +314,32 @@ export default function GroundTruthDashboard() {
         </div>
       `;
 
+      // Hover Tooltip Trigger
+      el.addEventListener('mouseenter', () => {
+        if (amenityPopupRef.current) amenityPopupRef.current.remove();
+        amenityPopupRef.current = new maplibregl.Popup({
+          offset: 15,
+          closeButton: false,
+          closeOnClick: false,
+        })
+          .setLngLat([pt.lng, pt.lat])
+          .setHTML(tooltipHtml)
+          .addTo(map.current);
+      });
+
+      el.addEventListener('mouseleave', () => {
+        if (amenityPopupRef.current) {
+          amenityPopupRef.current.remove();
+          amenityPopupRef.current = null;
+        }
+      });
+
+      // Click Tooltip Trigger (does not move target location marker)
       el.addEventListener('click', (event) => {
         event.stopPropagation();
         event.preventDefault();
 
-        if (amenityPopupRef.current) {
-          amenityPopupRef.current.remove();
-        }
-
+        if (amenityPopupRef.current) amenityPopupRef.current.remove();
         amenityPopupRef.current = new maplibregl.Popup({
           offset: 15,
           closeButton: true,
@@ -403,10 +421,10 @@ export default function GroundTruthDashboard() {
 
         map.current.flyTo({ center: [coords.lng, coords.lat], zoom: 14 });
 
-        // Ensure location pin stays anchored
+        // Maintain center marker visibility
         updateTargetMarkerPosition(coords.lng, coords.lat);
 
-        // Render amenity POI pins on map
+        // Render every reported amenity on the map
         if (data.amenityPoints) {
           renderAmenityPins(data.amenityPoints);
         }
@@ -427,7 +445,7 @@ export default function GroundTruthDashboard() {
 
   return (
     <main className="flex flex-col lg:flex-row h-screen w-screen overflow-hidden font-sans bg-slate-950 text-slate-100">
-      {/* Geolocation Decision Modal */}
+      {/* Geolocation Modal */}
       {showLocationModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl">
@@ -510,7 +528,7 @@ export default function GroundTruthDashboard() {
               </div>
             </div>
 
-            {/* Walking Distance Slider */}
+            {/* Walking Range Slider */}
             <div>
               <div className="flex justify-between text-xs mb-1">
                 <label className="uppercase text-slate-400 font-bold tracking-wider">
@@ -555,7 +573,7 @@ export default function GroundTruthDashboard() {
                   Verified Summary
                 </h3>
                 <span className="text-[11px] text-emerald-400 bg-emerald-950 border border-emerald-800 px-2 py-0.5 rounded-full font-mono">
-                  POIs PLOTTED ON MAP
+                  ALL {auditResult.amenityPoints?.length ?? 0} POIs ON MAP
                 </span>
               </div>
 
@@ -625,19 +643,19 @@ export default function GroundTruthDashboard() {
                   <>
                     <div className="flex justify-between py-1 border-b border-slate-800/60">
                       <span className="text-slate-400">Hospitals / Clinics:</span>
-                      <span className="font-semibold text-slate-200">{auditResult.breakdowns?.civic?.hospitalsNearby ?? 'No data'}</span>
+                      <span className="font-semibold text-rose-400">{auditResult.breakdowns?.civic?.hospitalsNearby ?? 0}</span>
                     </div>
                     <div className="flex justify-between py-1 border-b border-slate-800/60">
                       <span className="text-slate-400">Schools:</span>
-                      <span className="font-semibold text-slate-200">{auditResult.breakdowns?.civic?.schoolsNearby ?? 'No data'}</span>
+                      <span className="font-semibold text-blue-400">{auditResult.breakdowns?.civic?.schoolsNearby ?? 0}</span>
                     </div>
                     <div className="flex justify-between py-1 border-b border-slate-800/60">
                       <span className="text-slate-400">Grocery Stores / Markets:</span>
-                      <span className="font-semibold text-slate-200">{auditResult.breakdowns?.civic?.groceryHubs ?? 'No data'}</span>
+                      <span className="font-semibold text-emerald-400">{auditResult.breakdowns?.civic?.groceryHubs ?? 0}</span>
                     </div>
                     <div className="flex justify-between py-1 border-b border-slate-800/60">
                       <span className="text-slate-400">Pharmacies / Chemists:</span>
-                      <span className="font-semibold text-slate-200">{auditResult.breakdowns?.civic?.chemistShops ?? 'No data'}</span>
+                      <span className="font-semibold text-purple-400">{auditResult.breakdowns?.civic?.chemistShops ?? 0}</span>
                     </div>
                     <div className="flex justify-between py-1 border-b border-slate-800/60">
                       <span className="text-slate-400">Temples / Mandirs:</span>
@@ -725,7 +743,7 @@ export default function GroundTruthDashboard() {
       <div className="flex-1 h-[50vh] lg:h-full relative cursor-crosshair">
         <div ref={mapContainer} className="w-full h-full" />
 
-        {/* POI Filter Toolbar (Active after audit) */}
+        {/* POI Filter Toolbar */}
         {auditResult && (
           <div className="absolute top-4 left-4 bg-slate-900/90 backdrop-blur border border-slate-800 p-2 rounded-xl text-xs text-slate-200 shadow-2xl flex flex-wrap items-center gap-1.5 z-10 max-w-xl">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider pl-1">Amenities:</span>
@@ -739,7 +757,7 @@ export default function GroundTruthDashboard() {
               }`}
             >
               <span>🏥</span>
-              <span>Hospitals</span>
+              <span>Hospitals ({auditResult.breakdowns?.civic?.hospitalsNearby ?? 0})</span>
             </button>
             <button
               type="button"
@@ -751,7 +769,7 @@ export default function GroundTruthDashboard() {
               }`}
             >
               <span>🏫</span>
-              <span>Schools</span>
+              <span>Schools ({auditResult.breakdowns?.civic?.schoolsNearby ?? 0})</span>
             </button>
             <button
               type="button"
@@ -763,7 +781,7 @@ export default function GroundTruthDashboard() {
               }`}
             >
               <span>🛒</span>
-              <span>Markets</span>
+              <span>Markets ({auditResult.breakdowns?.civic?.groceryHubs ?? 0})</span>
             </button>
             <button
               type="button"
@@ -775,7 +793,7 @@ export default function GroundTruthDashboard() {
               }`}
             >
               <span>💊</span>
-              <span>Pharmacies</span>
+              <span>Pharmacies ({auditResult.breakdowns?.civic?.chemistShops ?? 0})</span>
             </button>
             <button
               type="button"
@@ -787,7 +805,7 @@ export default function GroundTruthDashboard() {
               }`}
             >
               <span>🛕</span>
-              <span>Temples</span>
+              <span>Temples ({auditResult.breakdowns?.civic?.templesNearby ?? 0})</span>
             </button>
             <button
               type="button"
@@ -799,7 +817,7 @@ export default function GroundTruthDashboard() {
               }`}
             >
               <span>🕌</span>
-              <span>Masjids</span>
+              <span>Masjids ({auditResult.breakdowns?.civic?.masjidsNearby ?? 0})</span>
             </button>
             <button
               type="button"
@@ -811,7 +829,7 @@ export default function GroundTruthDashboard() {
               }`}
             >
               <span>⛪</span>
-              <span>Churches</span>
+              <span>Churches ({auditResult.breakdowns?.civic?.churchesNearby ?? 0})</span>
             </button>
           </div>
         )}
@@ -821,7 +839,7 @@ export default function GroundTruthDashboard() {
           <div className="absolute top-4 right-4 bg-slate-900/90 backdrop-blur border border-slate-800 px-3 py-2 rounded-xl text-[11px] text-slate-300 shadow-xl flex items-center space-x-3 pointer-events-none z-10">
             <div className="flex items-center space-x-1.5">
               <span className="w-3 h-3 rounded-full bg-emerald-500/30 border border-emerald-400 inline-block" />
-              <span>{distanceKm} km Isochrone</span>
+              <span>{distanceKm} km Reach Boundary</span>
             </div>
             <div className="flex items-center space-x-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block" />
