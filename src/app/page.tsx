@@ -11,7 +11,6 @@ export default function GroundTruthDashboard() {
   const amenityPopupRef = useRef<any>(null);
   const maplibreglRef = useRef<any>(null);
 
-  // Default coordinates: Bengaluru
   const [coords, setCoords] = useState<{ lat: number; lng: number }>({
     lat: 12.9716,
     lng: 77.5946,
@@ -44,14 +43,14 @@ export default function GroundTruthDashboard() {
 
   const calculateDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2: number) => {
     const R = 6371e3;
-    const phi1 = (lat1 * Math.PI) / 180;
-    const phi2 = (lat2 * Math.PI) / 180;
-    const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
-    const deltaLambda = ((lon2 - lon1) * Math.PI) / 180;
+    const p1 = (lat1 * Math.PI) / 180;
+    const p2 = (lat2 * Math.PI) / 180;
+    const dp = ((lat2 - lat1) * Math.PI) / 180;
+    const dl = ((lon2 - lon1) * Math.PI) / 180;
 
     const a =
-      Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
-      Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+      Math.sin(dp / 2) * Math.sin(dp / 2) +
+      Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) * Math.sin(dl / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
     return Math.round(R * c);
@@ -436,7 +435,7 @@ export default function GroundTruthDashboard() {
 
   return (
     <main className="flex flex-col lg:flex-row h-screen w-screen overflow-hidden font-sans bg-slate-950 text-slate-100">
-      {/* Geolocation Decision Modal */}
+      {/* Geolocation Modal */}
       {showLocationModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl">
@@ -693,7 +692,7 @@ export default function GroundTruthDashboard() {
                       <span className="text-slate-400">Waste Dumps / Drainage:</span>
                       <span className="text-slate-300 text-[11px]">{auditResult.breakdowns?.neighbourhood?.dumpWasteOrSewageCanal ?? 'No data'}</span>
                     </div>
-                    <div className="py-1">
+                    <div className="py-1 border-b border-slate-800/60">
                       <span className="text-slate-400 block mb-0.5">Worship Places:</span>
                       <span className="text-slate-300 text-[11px]">{auditResult.breakdowns?.neighbourhood?.placesOfWorshipSummary ?? 'No data'}</span>
                     </div>
