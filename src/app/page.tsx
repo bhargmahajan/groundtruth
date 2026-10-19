@@ -6,9 +6,9 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 export default function GroundTruthDashboard() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<any>(null);
-  const marker = useRef<any>(null);
-  const activePopup = useRef<any>(null);
+  const targetMarkerRef = useRef<any>(null);
   const amenityMarkersRef = useRef<any[]>([]);
+  const amenityPopupRef = useRef<any>(null);
   const maplibreglRef = useRef<any>(null);
 
   // Default coordinates: Bengaluru
@@ -24,44 +24,54 @@ export default function GroundTruthDashboard() {
   const [auditResult, setAuditResult] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'civic' | 'neighbourhood' | 'environment'>('civic');
 
-  // Track whether input parameters have changed since last audit run
-  const [isInputStale, setIsInputStale] = useState<boolean>(false);
-
+  // Filter toggles for amenity POIs
   const [visibleFilters, setVisibleFilters] = useState<{
     hospital: boolean;
     school: boolean;
     grocery: boolean;
     pharmacy: boolean;
+    temple: boolean;
+    masjid: boolean;
+    church: boolean;
   }>({
     hospital: true,
     school: true,
     grocery: true,
     pharmacy: true,
+    temple: true,
+    masjid: true,
+    church: true,
   });
 
+  const calculateDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const R = 6371e3;
+    const phi1 = (lat1 * Math.PI) / 180;
+    const phi2 = (lat2 * Math.PI) / 180;
+    const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
+    const deltaLambda = ((lon2 - lon1) * Math.PI) / 180;
+
+    const a =
+      Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+      Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return Math.round(R * c);
+  };
+
   const clearExistingAuditVisuals = () => {
-    // 1. Clear POI pins
     amenityMarkersRef.current.forEach((m) => m.remove());
     amenityMarkersRef.current = [];
 
-    // 2. Clear Popup
-    if (activePopup.current) {
-      activePopup.current.remove();
-      activePopup.current = null;
+    if (amenityPopupRef.current) {
+      amenityPopupRef.current.remove();
+      amenityPopupRef.current = null;
     }
 
-    // 3. Clear Map Isochrone Layers
     if (map.current) {
       if (map.current.getLayer('isochrone-line')) map.current.removeLayer('isochrone-line');
       if (map.current.getLayer('isochrone-layer')) map.current.removeLayer('isochrone-layer');
       if (map.current.getSource('isochrone-source')) map.current.removeSource('isochrone-source');
     }
-  };
-
-  const handleInputChange = () => {
-    setIsInputStale(true);
-    setAuditResult(null);
-    clearExistingAuditVisuals();
   };
 
   const reverseGeocode = async (lat: number, lng: number) => {
@@ -78,6 +88,42 @@ export default function GroundTruthDashboard() {
     }
   };
 
+  // Persistent Target Pin
+  const updateTargetMarkerPosition = (lng: number, lat: number) => {
+    if (!map.current) return;
+    const maplibregl = maplibreglRef.current;
+    if (!maplibregl) return;
+
+    if (!targetMarkerRef.current) {
+      const el = document.createElement('div');
+      el.className = 'target-center-beacon';
+      el.style.width = '24px';
+      el.style.height = '24px';
+      el.style.backgroundColor = '#10b981';
+      el.style.borderRadius = '50%';
+      el.style.border = '3px solid #ffffff';
+      el.style.boxShadow = '0 0 15px rgba(16, 185, 129, 0.9)';
+      el.style.cursor = 'grab';
+
+      targetMarkerRef.current = new maplibregl.Marker({
+        element: el,
+        draggable: true,
+      })
+        .setLngLat([lng, lat])
+        .addTo(map.current);
+
+      targetMarkerRef.current.on('dragend', () => {
+        const lngLat = targetMarkerRef.current.getLngLat();
+        setCoords({ lat: lngLat.lat, lng: lngLat.lng });
+        clearExistingAuditVisuals();
+        setAuditResult(null);
+        reverseGeocode(lngLat.lat, lngLat.lng);
+      });
+    } else {
+      targetMarkerRef.current.setLngLat([lng, lat]);
+    }
+  };
+
   const handleAllowLocation = () => {
     setShowLocationModal(false);
     if ('geolocation' in navigator) {
@@ -86,13 +132,15 @@ export default function GroundTruthDashboard() {
           const lat = pos.coords.latitude;
           const lng = pos.coords.longitude;
           setCoords({ lat, lng });
-          handleInputChange();
+          clearExistingAuditVisuals();
+          setAuditResult(null);
           if (map.current) map.current.flyTo({ center: [lng, lat], zoom: 15 });
-          if (marker.current) marker.current.setLngLat([lng, lat]);
+          updateTargetMarkerPosition(lng, lat);
           reverseGeocode(lat, lng);
         },
         () => {
           reverseGeocode(coords.lat, coords.lng);
+          updateTargetMarkerPosition(coords.lng, coords.lat);
         },
         { enableHighAccuracy: true, timeout: 8000 }
       );
@@ -101,6 +149,7 @@ export default function GroundTruthDashboard() {
 
   const handleDeclineLocation = () => {
     setShowLocationModal(false);
+    updateTargetMarkerPosition(coords.lng, coords.lat);
     reverseGeocode(coords.lat, coords.lng);
   };
 
@@ -154,25 +203,18 @@ export default function GroundTruthDashboard() {
         zoom: 14,
       });
 
-      marker.current = new maplibregl.Marker({
-        draggable: true,
-        color: '#10b981',
-      })
-        .setLngLat([coords.lng, coords.lat])
-        .addTo(map.current);
-
-      marker.current.on('dragend', () => {
-        const lngLat = marker.current.getLngLat();
-        setCoords({ lat: lngLat.lat, lng: lngLat.lng });
-        handleInputChange();
-        reverseGeocode(lngLat.lat, lngLat.lng);
+      map.current.on('load', () => {
+        updateTargetMarkerPosition(coords.lng, coords.lat);
       });
 
       map.current.on('click', (e: any) => {
+        if (e.originalEvent?.defaultPrevented) return;
+
         const { lng, lat } = e.lngLat;
-        marker.current.setLngLat([lng, lat]);
         setCoords({ lat, lng });
-        handleInputChange();
+        updateTargetMarkerPosition(lng, lat);
+        clearExistingAuditVisuals();
+        setAuditResult(null);
         reverseGeocode(lat, lng);
       });
     });
@@ -200,9 +242,10 @@ export default function GroundTruthDashboard() {
           const newLng = parseFloat(data[0].lon);
 
           setCoords({ lat: newLat, lng: newLng });
-          handleInputChange();
+          updateTargetMarkerPosition(newLng, newLat);
+          clearExistingAuditVisuals();
+          setAuditResult(null);
           if (map.current) map.current.flyTo({ center: [newLng, newLat], zoom: 15 });
-          if (marker.current) marker.current.setLngLat([newLng, newLat]);
         }
       } catch (err) {
         console.error('Search geocoding failed:', err);
@@ -210,29 +253,45 @@ export default function GroundTruthDashboard() {
     }
   };
 
+  /**
+   * Places every amenity reported on the map and binds distance tooltips
+   */
   const renderAmenityPins = (points: any[]) => {
+    amenityMarkersRef.current.forEach((m) => m.remove());
+    amenityMarkersRef.current = [];
+
     const maplibregl = maplibreglRef.current;
     if (!map.current || !maplibregl || !points) return;
 
     const typeConfig: Record<string, { color: string; icon: string; label: string }> = {
       hospital: { color: '#ef4444', icon: '🏥', label: 'Hospital/Clinic' },
       school: { color: '#3b82f6', icon: '🏫', label: 'School' },
-      grocery: { color: '#10b981', icon: '🛒', label: 'Grocery/Market' },
+      grocery: { color: '#10b981', icon: '🛒', label: 'Market/Grocery' },
       pharmacy: { color: '#a855f7', icon: '💊', label: 'Pharmacy' },
+      temple: { color: '#f97316', icon: '🛕', label: 'Temple' },
+      masjid: { color: '#06b6d4', icon: '🕌', label: 'Masjid' },
+      church: { color: '#eab308', icon: '⛪', label: 'Church' },
     };
 
     points.forEach((pt: any) => {
       const cfg = typeConfig[pt.type] || { color: '#64748b', icon: '📍', label: 'Amenity' };
 
+      const distanceMeters = calculateDistanceMeters(coords.lat, coords.lng, pt.lat, pt.lng);
+      const walkingMinutes = Math.max(1, Math.round(distanceMeters / 80));
+      const formattedDistance =
+        distanceMeters >= 1000
+          ? `${(distanceMeters / 1000).toFixed(2)} km`
+          : `${distanceMeters} meters`;
+
       const el = document.createElement('div');
       el.className = 'amenity-marker';
       el.dataset.type = pt.type;
-      el.style.width = '28px';
-      el.style.height = '28px';
+      el.style.width = '30px';
+      el.style.height = '30px';
       el.style.backgroundColor = cfg.color;
       el.style.borderRadius = '50%';
       el.style.border = '2px solid #ffffff';
-      el.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+      el.style.boxShadow = '0 2px 8px rgba(0,0,0,0.45)';
       el.style.display = visibleFilters[pt.type as keyof typeof visibleFilters] ? 'flex' : 'none';
       el.style.alignItems = 'center';
       el.style.justifyContent = 'center';
@@ -240,17 +299,59 @@ export default function GroundTruthDashboard() {
       el.style.fontSize = '14px';
       el.innerHTML = cfg.icon;
 
-      const popup = new maplibregl.Popup({ offset: 15 }).setHTML(`
-        <div style="font-family: system-ui; padding: 4px; color: #0f172a;">
-          <div style="font-size: 10px; color: ${cfg.color}; font-weight: 800; text-transform: uppercase;">${cfg.label}</div>
-          <div style="font-size: 13px; font-weight: 700; margin-top: 2px;">${pt.name}</div>
-          <div style="font-size: 10px; color: #64748b; margin-top: 2px;">Coord: ${pt.lat.toFixed(4)}, ${pt.lng.toFixed(4)}</div>
+      const tooltipHtml = `
+        <div style="font-family: system-ui, sans-serif; padding: 4px; color: #0f172a; min-width: 190px;">
+          <div style="font-size: 10px; color: ${cfg.color}; font-weight: 800; text-transform: uppercase;">
+            ${cfg.label}
+          </div>
+          <div style="font-size: 13px; font-weight: 700; margin-top: 2px; color: #0f172a;">
+            ${pt.name}
+          </div>
+          <div style="font-size: 11px; color: #475569; margin-top: 4px; border-top: 1px solid #e2e8f0; padding-top: 4px; display: flex; justify-content: space-between;">
+            <span>🚶 <strong>${formattedDistance}</strong></span>
+            <span>⏱️ <strong>~${walkingMinutes} min</strong></span>
+          </div>
         </div>
-      `);
+      `;
+
+      // Hover Tooltip Trigger
+      el.addEventListener('mouseenter', () => {
+        if (amenityPopupRef.current) amenityPopupRef.current.remove();
+        amenityPopupRef.current = new maplibregl.Popup({
+          offset: 15,
+          closeButton: false,
+          closeOnClick: false,
+        })
+          .setLngLat([pt.lng, pt.lat])
+          .setHTML(tooltipHtml)
+          .addTo(map.current);
+      });
+
+      el.addEventListener('mouseleave', () => {
+        if (amenityPopupRef.current) {
+          amenityPopupRef.current.remove();
+          amenityPopupRef.current = null;
+        }
+      });
+
+      // Click Tooltip Trigger (does not move target location marker)
+      el.addEventListener('click', (event) => {
+        event.stopPropagation();
+        event.preventDefault();
+
+        if (amenityPopupRef.current) amenityPopupRef.current.remove();
+        amenityPopupRef.current = new maplibregl.Popup({
+          offset: 15,
+          closeButton: true,
+          closeOnClick: false,
+        })
+          .setLngLat([pt.lng, pt.lat])
+          .setHTML(tooltipHtml)
+          .addTo(map.current);
+      });
 
       const mapMarker = new maplibregl.Marker({ element: el })
         .setLngLat([pt.lng, pt.lat])
-        .setPopup(popup)
         .addTo(map.current);
 
       amenityMarkersRef.current.push(mapMarker);
@@ -269,9 +370,6 @@ export default function GroundTruthDashboard() {
     });
   };
 
-  /**
-   * Always runs a fresh audit query
-   */
   const runAudit = async () => {
     setLoading(true);
     clearExistingAuditVisuals();
@@ -290,7 +388,6 @@ export default function GroundTruthDashboard() {
 
       const data = await res.json();
       setAuditResult(data);
-      setIsInputStale(false);
 
       if (map.current && data.isochrone) {
         map.current.addSource('isochrone-source', {
@@ -308,7 +405,7 @@ export default function GroundTruthDashboard() {
           source: 'isochrone-source',
           paint: {
             'fill-color': '#10b981',
-            'fill-opacity': 0.25,
+            'fill-opacity': 0.22,
           },
         });
 
@@ -324,51 +421,12 @@ export default function GroundTruthDashboard() {
 
         map.current.flyTo({ center: [coords.lng, coords.lat], zoom: 14 });
 
+        // Maintain center marker visibility
+        updateTargetMarkerPosition(coords.lng, coords.lat);
+
+        // Render every reported amenity on the map
         if (data.amenityPoints) {
           renderAmenityPins(data.amenityPoints);
-        }
-
-        const maplibregl = maplibreglRef.current;
-        if (maplibregl) {
-          const popupHtml = `
-            <div style="font-family: system-ui, sans-serif; min-width: 250px; padding: 4px; color: #0f172a;">
-              <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; margin-bottom: 8px;">
-                <span style="font-weight: 800; font-size: 13px; color: #047857; text-transform: uppercase;">GROUNDTRUTH AUDIT</span>
-                <span style="font-size: 11px; background: #d1fae5; color: #065f46; padding: 2px 6px; border-radius: 9999px; font-weight: 700;">${distanceKm} KM</span>
-              </div>
-              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px;">
-                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 5px; text-align: center;">
-                  <div style="font-size: 9px; color: #64748b; font-weight: 600; text-transform: uppercase;">Civic Infra</div>
-                  <div style="font-size: 15px; font-weight: 900;">${data.scores?.civicInfrastructureScore ?? 'N/A'}</div>
-                </div>
-                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 5px; text-align: center;">
-                  <div style="font-size: 9px; color: #64748b; font-weight: 600; text-transform: uppercase;">Neighbourhood</div>
-                  <div style="font-size: 15px; font-weight: 900;">${data.scores?.neighbourhoodScore ?? 'N/A'}</div>
-                </div>
-                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 5px; text-align: center;">
-                  <div style="font-size: 9px; color: #64748b; font-weight: 600; text-transform: uppercase;">Environment</div>
-                  <div style="font-size: 15px; font-weight: 900;">${data.scores?.environmentalScore ?? 'N/A'}</div>
-                </div>
-                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 5px; text-align: center;">
-                  <div style="font-size: 9px; color: #64748b; font-weight: 600; text-transform: uppercase;">Walk Reality</div>
-                  <div style="font-size: 15px; font-weight: 900;">${data.scores?.commuteRealityScore ?? 'N/A'}</div>
-                </div>
-              </div>
-              <div style="font-size: 11px; background: #f1f5f9; padding: 6px; border-radius: 6px; color: #334155;">
-                🏥 ${data.breakdowns?.civic?.hospitalsNearby ?? 0} &bull; 🏫 ${data.breakdowns?.civic?.schoolsNearby ?? 0} &bull; 🛒 ${data.breakdowns?.civic?.groceryHubs ?? 0} &bull; 💊 ${data.breakdowns?.civic?.chemistShops ?? 0}
-              </div>
-            </div>
-          `;
-
-          activePopup.current = new maplibregl.Popup({
-            closeButton: true,
-            closeOnClick: false,
-            maxWidth: '320px',
-            offset: 25,
-          })
-            .setLngLat([coords.lng, coords.lat])
-            .setHTML(popupHtml)
-            .addTo(map.current);
         }
       }
     } catch (err) {
@@ -387,7 +445,7 @@ export default function GroundTruthDashboard() {
 
   return (
     <main className="flex flex-col lg:flex-row h-screen w-screen overflow-hidden font-sans bg-slate-950 text-slate-100">
-      {/* Geolocation Decision Modal */}
+      {/* Geolocation Modal */}
       {showLocationModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl">
@@ -396,7 +454,7 @@ export default function GroundTruthDashboard() {
               <h3 className="text-lg font-bold text-white">Enable Accurate Location?</h3>
             </div>
             <p className="text-sm text-slate-300 mb-6 leading-relaxed">
-              GroundTruth uses your coordinates to calculate real-world walking isochrones, nearby civic amenities, and flood hazards. Would you like to use your current GPS location or continue with the default position?
+              GroundTruth uses your precise coordinates to audit local amenities, monsoon waterlogging risks, and walking boundaries. Would you like to use your current GPS location or continue with the default position?
             </p>
             <div className="flex space-x-3 justify-end">
               <button
@@ -449,7 +507,8 @@ export default function GroundTruthDashboard() {
                 value={address}
                 onChange={(e) => {
                   setAddress(e.target.value);
-                  handleInputChange();
+                  clearExistingAuditVisuals();
+                  setAuditResult(null);
                 }}
                 onKeyDown={handleAddressSearch}
                 placeholder="Type location & press Enter"
@@ -469,7 +528,7 @@ export default function GroundTruthDashboard() {
               </div>
             </div>
 
-            {/* Walking Distance Slider */}
+            {/* Walking Range Slider */}
             <div>
               <div className="flex justify-between text-xs mb-1">
                 <label className="uppercase text-slate-400 font-bold tracking-wider">
@@ -485,7 +544,8 @@ export default function GroundTruthDashboard() {
                 value={distanceKm}
                 onChange={(e) => {
                   setDistanceKm(parseFloat(e.target.value));
-                  handleInputChange();
+                  clearExistingAuditVisuals();
+                  setAuditResult(null);
                 }}
                 className="w-full accent-emerald-500 bg-slate-800 rounded-lg cursor-pointer"
               />
@@ -499,17 +559,9 @@ export default function GroundTruthDashboard() {
             <button
               onClick={runAudit}
               disabled={loading}
-              className={`w-full font-bold py-3 rounded-lg transition duration-200 disabled:opacity-50 cursor-pointer text-sm uppercase tracking-wider ${
-                isInputStale
-                  ? 'bg-emerald-400 hover:bg-emerald-500 text-slate-950 ring-2 ring-emerald-300 ring-offset-2 ring-offset-slate-900 animate-pulse'
-                  : 'bg-emerald-500 hover:bg-emerald-600 text-slate-950'
-              }`}
+              className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold py-3 rounded-lg transition duration-200 disabled:opacity-50 cursor-pointer text-sm uppercase tracking-wider"
             >
-              {loading
-                ? 'Auditing Spatial Reality...'
-                : isInputStale
-                ? 'Generate Updated Report'
-                : 'Generate GroundTruth Report'}
+              {loading ? 'Auditing Spatial Reality...' : 'Generate GroundTruth Report'}
             </button>
           </div>
 
@@ -521,7 +573,7 @@ export default function GroundTruthDashboard() {
                   Verified Summary
                 </h3>
                 <span className="text-[11px] text-emerald-400 bg-emerald-950 border border-emerald-800 px-2 py-0.5 rounded-full font-mono">
-                  POIs PLOTTED ON MAP
+                  ALL {auditResult.amenityPoints?.length ?? 0} POIs ON MAP
                 </span>
               </div>
 
@@ -591,19 +643,31 @@ export default function GroundTruthDashboard() {
                   <>
                     <div className="flex justify-between py-1 border-b border-slate-800/60">
                       <span className="text-slate-400">Hospitals / Clinics:</span>
-                      <span className="font-semibold text-slate-200">{auditResult.breakdowns?.civic?.hospitalsNearby ?? 'No data'}</span>
+                      <span className="font-semibold text-rose-400">{auditResult.breakdowns?.civic?.hospitalsNearby ?? 0}</span>
                     </div>
                     <div className="flex justify-between py-1 border-b border-slate-800/60">
                       <span className="text-slate-400">Schools:</span>
-                      <span className="font-semibold text-slate-200">{auditResult.breakdowns?.civic?.schoolsNearby ?? 'No data'}</span>
+                      <span className="font-semibold text-blue-400">{auditResult.breakdowns?.civic?.schoolsNearby ?? 0}</span>
                     </div>
                     <div className="flex justify-between py-1 border-b border-slate-800/60">
-                      <span className="text-slate-400">Grocery Stores / Supermarkets:</span>
-                      <span className="font-semibold text-slate-200">{auditResult.breakdowns?.civic?.groceryHubs ?? 'No data'}</span>
+                      <span className="text-slate-400">Grocery Stores / Markets:</span>
+                      <span className="font-semibold text-emerald-400">{auditResult.breakdowns?.civic?.groceryHubs ?? 0}</span>
                     </div>
                     <div className="flex justify-between py-1 border-b border-slate-800/60">
-                      <span className="text-slate-400">Pharmacies / Chemist Shops:</span>
-                      <span className="font-semibold text-slate-200">{auditResult.breakdowns?.civic?.chemistShops ?? 'No data'}</span>
+                      <span className="text-slate-400">Pharmacies / Chemists:</span>
+                      <span className="font-semibold text-purple-400">{auditResult.breakdowns?.civic?.chemistShops ?? 0}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-800/60">
+                      <span className="text-slate-400">Temples / Mandirs:</span>
+                      <span className="font-semibold text-amber-400">{auditResult.breakdowns?.civic?.templesNearby ?? 0}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-800/60">
+                      <span className="text-slate-400">Masjids / Mosques:</span>
+                      <span className="font-semibold text-cyan-400">{auditResult.breakdowns?.civic?.masjidsNearby ?? 0}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-800/60">
+                      <span className="text-slate-400">Churches:</span>
+                      <span className="font-semibold text-yellow-400">{auditResult.breakdowns?.civic?.churchesNearby ?? 0}</span>
                     </div>
                     <div className="py-1 border-b border-slate-800/60">
                       <span className="text-slate-400 block mb-0.5">E-Commerce Deliveries:</span>
@@ -639,8 +703,8 @@ export default function GroundTruthDashboard() {
                       <span className="text-amber-400 text-[11px]">{auditResult.breakdowns?.neighbourhood?.dumpWasteOrSewageCanal ?? 'No data'}</span>
                     </div>
                     <div className="py-1">
-                      <span className="text-slate-400 block mb-0.5">Future Infrastructure Plans:</span>
-                      <span className="text-slate-300 text-[11px]">{auditResult.breakdowns?.neighbourhood?.futureInfrastructurePlans ?? 'No data'}</span>
+                      <span className="text-slate-400 block mb-0.5">Worship Infrastructure:</span>
+                      <span className="text-slate-300 text-[11px]">{auditResult.breakdowns?.neighbourhood?.placesOfWorshipSummary ?? 'No data'}</span>
                     </div>
                   </>
                 )}
@@ -679,71 +743,107 @@ export default function GroundTruthDashboard() {
       <div className="flex-1 h-[50vh] lg:h-full relative cursor-crosshair">
         <div ref={mapContainer} className="w-full h-full" />
 
-        {/* POI Filter Toolbar (Active after audit) */}
+        {/* POI Filter Toolbar */}
         {auditResult && (
-          <div className="absolute top-4 left-4 bg-slate-900/90 backdrop-blur border border-slate-800 p-2 rounded-xl text-xs text-slate-200 shadow-2xl flex items-center space-x-2 z-10">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider pl-1">Map POIs:</span>
+          <div className="absolute top-4 left-4 bg-slate-900/90 backdrop-blur border border-slate-800 p-2 rounded-xl text-xs text-slate-200 shadow-2xl flex flex-wrap items-center gap-1.5 z-10 max-w-xl">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider pl-1">Amenities:</span>
             <button
               type="button"
               onClick={() => toggleFilter('hospital')}
-              className={`px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center space-x-1 transition cursor-pointer ${
+              className={`px-2 py-0.5 rounded-lg border text-xs font-semibold flex items-center space-x-1 transition cursor-pointer ${
                 visibleFilters.hospital
                   ? 'bg-rose-950/80 border-rose-700 text-rose-300'
                   : 'bg-slate-800 border-slate-700 text-slate-500 line-through'
               }`}
             >
               <span>🏥</span>
-              <span>Hospitals</span>
+              <span>Hospitals ({auditResult.breakdowns?.civic?.hospitalsNearby ?? 0})</span>
             </button>
             <button
               type="button"
               onClick={() => toggleFilter('school')}
-              className={`px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center space-x-1 transition cursor-pointer ${
+              className={`px-2 py-0.5 rounded-lg border text-xs font-semibold flex items-center space-x-1 transition cursor-pointer ${
                 visibleFilters.school
                   ? 'bg-blue-950/80 border-blue-700 text-blue-300'
                   : 'bg-slate-800 border-slate-700 text-slate-500 line-through'
               }`}
             >
               <span>🏫</span>
-              <span>Schools</span>
+              <span>Schools ({auditResult.breakdowns?.civic?.schoolsNearby ?? 0})</span>
             </button>
             <button
               type="button"
               onClick={() => toggleFilter('grocery')}
-              className={`px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center space-x-1 transition cursor-pointer ${
+              className={`px-2 py-0.5 rounded-lg border text-xs font-semibold flex items-center space-x-1 transition cursor-pointer ${
                 visibleFilters.grocery
                   ? 'bg-emerald-950/80 border-emerald-700 text-emerald-300'
                   : 'bg-slate-800 border-slate-700 text-slate-500 line-through'
               }`}
             >
               <span>🛒</span>
-              <span>Marts</span>
+              <span>Markets ({auditResult.breakdowns?.civic?.groceryHubs ?? 0})</span>
             </button>
             <button
               type="button"
               onClick={() => toggleFilter('pharmacy')}
-              className={`px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center space-x-1 transition cursor-pointer ${
+              className={`px-2 py-0.5 rounded-lg border text-xs font-semibold flex items-center space-x-1 transition cursor-pointer ${
                 visibleFilters.pharmacy
                   ? 'bg-purple-950/80 border-purple-700 text-purple-300'
                   : 'bg-slate-800 border-slate-700 text-slate-500 line-through'
               }`}
             >
               <span>💊</span>
-              <span>Pharmacies</span>
+              <span>Pharmacies ({auditResult.breakdowns?.civic?.chemistShops ?? 0})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleFilter('temple')}
+              className={`px-2 py-0.5 rounded-lg border text-xs font-semibold flex items-center space-x-1 transition cursor-pointer ${
+                visibleFilters.temple
+                  ? 'bg-amber-950/80 border-amber-700 text-amber-300'
+                  : 'bg-slate-800 border-slate-700 text-slate-500 line-through'
+              }`}
+            >
+              <span>🛕</span>
+              <span>Temples ({auditResult.breakdowns?.civic?.templesNearby ?? 0})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleFilter('masjid')}
+              className={`px-2 py-0.5 rounded-lg border text-xs font-semibold flex items-center space-x-1 transition cursor-pointer ${
+                visibleFilters.masjid
+                  ? 'bg-cyan-950/80 border-cyan-700 text-cyan-300'
+                  : 'bg-slate-800 border-slate-700 text-slate-500 line-through'
+              }`}
+            >
+              <span>🕌</span>
+              <span>Masjids ({auditResult.breakdowns?.civic?.masjidsNearby ?? 0})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleFilter('church')}
+              className={`px-2 py-0.5 rounded-lg border text-xs font-semibold flex items-center space-x-1 transition cursor-pointer ${
+                visibleFilters.church
+                  ? 'bg-yellow-950/80 border-yellow-700 text-yellow-300'
+                  : 'bg-slate-800 border-slate-700 text-slate-500 line-through'
+              }`}
+            >
+              <span>⛪</span>
+              <span>Churches ({auditResult.breakdowns?.civic?.churchesNearby ?? 0})</span>
             </button>
           </div>
         )}
 
-        {/* Dynamic Legend */}
+        {/* Legend */}
         {auditResult && (
           <div className="absolute top-4 right-4 bg-slate-900/90 backdrop-blur border border-slate-800 px-3 py-2 rounded-xl text-[11px] text-slate-300 shadow-xl flex items-center space-x-3 pointer-events-none z-10">
             <div className="flex items-center space-x-1.5">
               <span className="w-3 h-3 rounded-full bg-emerald-500/30 border border-emerald-400 inline-block" />
-              <span>{distanceKm} km Isochrone</span>
+              <span>{distanceKm} km Reach Boundary</span>
             </div>
             <div className="flex items-center space-x-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block" />
-              <span>Center</span>
+              <span>Target Pin</span>
             </div>
           </div>
         )}
