@@ -11,6 +11,7 @@ export default function GroundTruthDashboard() {
   const amenityPopupRef = useRef<any>(null);
   const maplibreglRef = useRef<any>(null);
 
+  // Default coordinates: Bengaluru
   const [coords, setCoords] = useState<{ lat: number; lng: number }>({
     lat: 12.9716,
     lng: 77.5946,
@@ -90,7 +91,7 @@ export default function GroundTruthDashboard() {
       el.style.backgroundColor = '#10b981';
       el.style.borderRadius = '50%';
       el.style.border = '3px solid #ffffff';
-      el.style.boxShadow = '0 0 15px rgba(16, 185, 129, 0.9)';
+      el.style.boxShadow = '0 0 16px rgba(16, 185, 129, 0.9)';
       el.style.cursor = 'grab';
 
       targetMarkerRef.current = new maplibreglRef.current.Marker({
@@ -636,7 +637,7 @@ export default function GroundTruthDashboard() {
                       <span className="font-semibold text-rose-400">{auditResult.breakdowns?.civic?.hospitalsNearby ?? 0}</span>
                     </div>
                     <div className="flex justify-between py-1 border-b border-slate-800/60">
-                      <span className="text-slate-400">Schools:</span>
+                      <span className="text-slate-400">Schools / Colleges:</span>
                       <span className="font-semibold text-blue-400">{auditResult.breakdowns?.civic?.schoolsNearby ?? 0}</span>
                     </div>
                     <div className="flex justify-between py-1 border-b border-slate-800/60">
@@ -689,11 +690,11 @@ export default function GroundTruthDashboard() {
                       <span className="font-semibold text-slate-200">{auditResult.breakdowns?.neighbourhood?.powerOutageFrequency ?? 'No data'}</span>
                     </div>
                     <div className="flex justify-between py-1 border-b border-slate-800/60">
-                      <span className="text-slate-400 block mb-0.5">Waste Dump / Open Sewage Canal:</span>
-                      <span className="text-amber-400 text-[11px]">{auditResult.breakdowns?.neighbourhood?.dumpWasteOrSewageCanal ?? 'No data'}</span>
+                      <span className="text-slate-400">Waste Dumps / Drainage:</span>
+                      <span className="text-slate-300 text-[11px]">{auditResult.breakdowns?.neighbourhood?.dumpWasteOrSewageCanal ?? 'No data'}</span>
                     </div>
                     <div className="py-1">
-                      <span className="text-slate-400 block mb-0.5">Worship Infrastructure:</span>
+                      <span className="text-slate-400 block mb-0.5">Worship Places:</span>
                       <span className="text-slate-300 text-[11px]">{auditResult.breakdowns?.neighbourhood?.placesOfWorshipSummary ?? 'No data'}</span>
                     </div>
                   </>
@@ -710,7 +711,7 @@ export default function GroundTruthDashboard() {
                       <span className="font-semibold text-slate-200">{auditResult.breakdowns?.environmental?.airQualityIndex ?? 'No data'}</span>
                     </div>
                     <div className="flex justify-between py-1 border-b border-slate-800/60">
-                      <span className="text-slate-400">Temperature & Microclimate:</span>
+                      <span className="text-slate-400">Temperature:</span>
                       <span className="font-semibold text-slate-200">{auditResult.breakdowns?.environmental?.generalTemperature ?? 'No data'}</span>
                     </div>
                     <div className="flex justify-between py-1">
@@ -829,7 +830,7 @@ export default function GroundTruthDashboard() {
           <div className="absolute top-4 right-4 bg-slate-900/90 backdrop-blur border border-slate-800 px-3 py-2 rounded-xl text-[11px] text-slate-300 shadow-xl flex items-center space-x-3 pointer-events-none z-10">
             <div className="flex items-center space-x-1.5">
               <span className="w-3 h-3 rounded-full bg-emerald-500/30 border border-emerald-400 inline-block" />
-              <span>{distanceKm} km Isochrone</span>
+              <span>{distanceKm} km Reach Boundary</span>
             </div>
             <div className="flex items-center space-x-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block" />
