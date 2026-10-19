@@ -14,9 +14,13 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "GroundTruth | Empirical Due Diligence & Commute Verification",
-  description: "Autonomous geospatial intelligence verifying real estate marketing claims, true pedestrian isochrones, and microclimate friction.",
+  description: "Autonomous geospatial intelligence verifying real estate marketing claims, true pedestrian isochrones, and civic infrastructure.",
   icons: {
-    icon: "/favicon.ico",
+    icon: [
+      { url: "/favicon.ico", type: "image/x-icon" }
+    ],
+    shortcut: ["/favicon.ico"],
+    apple: ["/favicon.ico"],
   },
 };
 
@@ -27,6 +31,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        <link rel="icon" href="/favicon.ico" sizes="any" />
+      </head>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         {children}
       </body>

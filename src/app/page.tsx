@@ -8,6 +8,7 @@ export default function GroundTruthDashboard() {
   const map = useRef<any>(null);
   const marker = useRef<any>(null);
   const activePopup = useRef<any>(null);
+  const amenityMarkersRef = useRef<any[]>([]);
   const maplibreglRef = useRef<any>(null);
 
   // Default coordinates: Bengaluru
@@ -22,6 +23,46 @@ export default function GroundTruthDashboard() {
   const [showLocationModal, setShowLocationModal] = useState<boolean>(true);
   const [auditResult, setAuditResult] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'civic' | 'neighbourhood' | 'environment'>('civic');
+
+  // Track whether input parameters have changed since last audit run
+  const [isInputStale, setIsInputStale] = useState<boolean>(false);
+
+  const [visibleFilters, setVisibleFilters] = useState<{
+    hospital: boolean;
+    school: boolean;
+    grocery: boolean;
+    pharmacy: boolean;
+  }>({
+    hospital: true,
+    school: true,
+    grocery: true,
+    pharmacy: true,
+  });
+
+  const clearExistingAuditVisuals = () => {
+    // 1. Clear POI pins
+    amenityMarkersRef.current.forEach((m) => m.remove());
+    amenityMarkersRef.current = [];
+
+    // 2. Clear Popup
+    if (activePopup.current) {
+      activePopup.current.remove();
+      activePopup.current = null;
+    }
+
+    // 3. Clear Map Isochrone Layers
+    if (map.current) {
+      if (map.current.getLayer('isochrone-line')) map.current.removeLayer('isochrone-line');
+      if (map.current.getLayer('isochrone-layer')) map.current.removeLayer('isochrone-layer');
+      if (map.current.getSource('isochrone-source')) map.current.removeSource('isochrone-source');
+    }
+  };
+
+  const handleInputChange = () => {
+    setIsInputStale(true);
+    setAuditResult(null);
+    clearExistingAuditVisuals();
+  };
 
   const reverseGeocode = async (lat: number, lng: number) => {
     try {
@@ -45,6 +86,7 @@ export default function GroundTruthDashboard() {
           const lat = pos.coords.latitude;
           const lng = pos.coords.longitude;
           setCoords({ lat, lng });
+          handleInputChange();
           if (map.current) map.current.flyTo({ center: [lng, lat], zoom: 15 });
           if (marker.current) marker.current.setLngLat([lng, lat]);
           reverseGeocode(lat, lng);
@@ -122,16 +164,16 @@ export default function GroundTruthDashboard() {
       marker.current.on('dragend', () => {
         const lngLat = marker.current.getLngLat();
         setCoords({ lat: lngLat.lat, lng: lngLat.lng });
+        handleInputChange();
         reverseGeocode(lngLat.lat, lngLat.lng);
-        if (activePopup.current) activePopup.current.remove();
       });
 
       map.current.on('click', (e: any) => {
         const { lng, lat } = e.lngLat;
         marker.current.setLngLat([lng, lat]);
         setCoords({ lat, lng });
+        handleInputChange();
         reverseGeocode(lat, lng);
-        if (activePopup.current) activePopup.current.remove();
       });
     });
 
@@ -158,21 +200,82 @@ export default function GroundTruthDashboard() {
           const newLng = parseFloat(data[0].lon);
 
           setCoords({ lat: newLat, lng: newLng });
+          handleInputChange();
           if (map.current) map.current.flyTo({ center: [newLng, newLat], zoom: 15 });
           if (marker.current) marker.current.setLngLat([newLng, newLat]);
-          if (activePopup.current) activePopup.current.remove();
         }
       } catch (err) {
-        console.error('Search forward geocoding failed:', err);
+        console.error('Search geocoding failed:', err);
       }
     }
   };
 
+  const renderAmenityPins = (points: any[]) => {
+    const maplibregl = maplibreglRef.current;
+    if (!map.current || !maplibregl || !points) return;
+
+    const typeConfig: Record<string, { color: string; icon: string; label: string }> = {
+      hospital: { color: '#ef4444', icon: '🏥', label: 'Hospital/Clinic' },
+      school: { color: '#3b82f6', icon: '🏫', label: 'School' },
+      grocery: { color: '#10b981', icon: '🛒', label: 'Grocery/Market' },
+      pharmacy: { color: '#a855f7', icon: '💊', label: 'Pharmacy' },
+    };
+
+    points.forEach((pt: any) => {
+      const cfg = typeConfig[pt.type] || { color: '#64748b', icon: '📍', label: 'Amenity' };
+
+      const el = document.createElement('div');
+      el.className = 'amenity-marker';
+      el.dataset.type = pt.type;
+      el.style.width = '28px';
+      el.style.height = '28px';
+      el.style.backgroundColor = cfg.color;
+      el.style.borderRadius = '50%';
+      el.style.border = '2px solid #ffffff';
+      el.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+      el.style.display = visibleFilters[pt.type as keyof typeof visibleFilters] ? 'flex' : 'none';
+      el.style.alignItems = 'center';
+      el.style.justifyContent = 'center';
+      el.style.cursor = 'pointer';
+      el.style.fontSize = '14px';
+      el.innerHTML = cfg.icon;
+
+      const popup = new maplibregl.Popup({ offset: 15 }).setHTML(`
+        <div style="font-family: system-ui; padding: 4px; color: #0f172a;">
+          <div style="font-size: 10px; color: ${cfg.color}; font-weight: 800; text-transform: uppercase;">${cfg.label}</div>
+          <div style="font-size: 13px; font-weight: 700; margin-top: 2px;">${pt.name}</div>
+          <div style="font-size: 10px; color: #64748b; margin-top: 2px;">Coord: ${pt.lat.toFixed(4)}, ${pt.lng.toFixed(4)}</div>
+        </div>
+      `);
+
+      const mapMarker = new maplibregl.Marker({ element: el })
+        .setLngLat([pt.lng, pt.lat])
+        .setPopup(popup)
+        .addTo(map.current);
+
+      amenityMarkersRef.current.push(mapMarker);
+    });
+  };
+
+  const toggleFilter = (type: keyof typeof visibleFilters) => {
+    const nextState = !visibleFilters[type];
+    setVisibleFilters((prev) => ({ ...prev, [type]: nextState }));
+
+    amenityMarkersRef.current.forEach((m) => {
+      const el = m.getElement();
+      if (el && el.dataset.type === type) {
+        el.style.display = nextState ? 'flex' : 'none';
+      }
+    });
+  };
+
   /**
-   * Generates audit and binds spatial HUD overlays directly on top of the map
+   * Always runs a fresh audit query
    */
   const runAudit = async () => {
     setLoading(true);
+    clearExistingAuditVisuals();
+
     try {
       const res = await fetch('/api/audit/request', {
         method: 'POST',
@@ -187,14 +290,9 @@ export default function GroundTruthDashboard() {
 
       const data = await res.json();
       setAuditResult(data);
+      setIsInputStale(false);
 
       if (map.current && data.isochrone) {
-        // Clean up existing map layers
-        if (map.current.getLayer('isochrone-line')) map.current.removeLayer('isochrone-line');
-        if (map.current.getLayer('isochrone-layer')) map.current.removeLayer('isochrone-layer');
-        if (map.current.getSource('isochrone-source')) map.current.removeSource('isochrone-source');
-
-        // Add Isochrone geometry layer
         map.current.addSource('isochrone-source', {
           type: 'geojson',
           data: {
@@ -210,7 +308,7 @@ export default function GroundTruthDashboard() {
           source: 'isochrone-source',
           paint: {
             'fill-color': '#10b981',
-            'fill-opacity': 0.3,
+            'fill-opacity': 0.25,
           },
         });
 
@@ -224,48 +322,40 @@ export default function GroundTruthDashboard() {
           },
         });
 
-        // Focus map view to fit bounds
         map.current.flyTo({ center: [coords.lng, coords.lat], zoom: 14 });
 
-        // Remove previous popup if exists
-        if (activePopup.current) {
-          activePopup.current.remove();
+        if (data.amenityPoints) {
+          renderAmenityPins(data.amenityPoints);
         }
 
-        // Render an interactive On-Map HUD Popup directly over the marker
         const maplibregl = maplibreglRef.current;
         if (maplibregl) {
           const popupHtml = `
-            <div style="font-family: system-ui, sans-serif; min-width: 260px; padding: 4px; color: #0f172a;">
+            <div style="font-family: system-ui, sans-serif; min-width: 250px; padding: 4px; color: #0f172a;">
               <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; margin-bottom: 8px;">
-                <span style="font-weight: 800; font-size: 13px; color: #047857; text-transform: uppercase; letter-spacing: 0.5px;">GROUNDTRUTH AUDIT</span>
-                <span style="font-size: 11px; background: #d1fae5; color: #065f46; padding: 2px 6px; border-radius: 9999px; font-weight: 700;">${distanceKm} KM WALKSPEC</span>
+                <span style="font-weight: 800; font-size: 13px; color: #047857; text-transform: uppercase;">GROUNDTRUTH AUDIT</span>
+                <span style="font-size: 11px; background: #d1fae5; color: #065f46; padding: 2px 6px; border-radius: 9999px; font-weight: 700;">${distanceKm} KM</span>
               </div>
-              
               <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px;">
-                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px; text-align: center;">
-                  <div style="font-size: 10px; color: #64748b; font-weight: 600; text-transform: uppercase;">Civic Infra</div>
-                  <div style="font-size: 16px; font-weight: 900; color: #0f172a;">${data.scores?.civicInfrastructureScore ?? 'N/A'}<span style="font-size: 10px; font-weight: 400; color: #64748b;">/100</span></div>
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 5px; text-align: center;">
+                  <div style="font-size: 9px; color: #64748b; font-weight: 600; text-transform: uppercase;">Civic Infra</div>
+                  <div style="font-size: 15px; font-weight: 900;">${data.scores?.civicInfrastructureScore ?? 'N/A'}</div>
                 </div>
-                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px; text-align: center;">
-                  <div style="font-size: 10px; color: #64748b; font-weight: 600; text-transform: uppercase;">Neighbourhood</div>
-                  <div style="font-size: 16px; font-weight: 900; color: #0f172a;">${data.scores?.neighbourhoodScore ?? 'N/A'}<span style="font-size: 10px; font-weight: 400; color: #64748b;">/100</span></div>
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 5px; text-align: center;">
+                  <div style="font-size: 9px; color: #64748b; font-weight: 600; text-transform: uppercase;">Neighbourhood</div>
+                  <div style="font-size: 15px; font-weight: 900;">${data.scores?.neighbourhoodScore ?? 'N/A'}</div>
                 </div>
-                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px; text-align: center;">
-                  <div style="font-size: 10px; color: #64748b; font-weight: 600; text-transform: uppercase;">Environment</div>
-                  <div style="font-size: 16px; font-weight: 900; color: #0f172a;">${data.scores?.environmentalScore ?? 'N/A'}<span style="font-size: 10px; font-weight: 400; color: #64748b;">/100</span></div>
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 5px; text-align: center;">
+                  <div style="font-size: 9px; color: #64748b; font-weight: 600; text-transform: uppercase;">Environment</div>
+                  <div style="font-size: 15px; font-weight: 900;">${data.scores?.environmentalScore ?? 'N/A'}</div>
                 </div>
-                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px; text-align: center;">
-                  <div style="font-size: 10px; color: #64748b; font-weight: 600; text-transform: uppercase;">Walk Reality</div>
-                  <div style="font-size: 16px; font-weight: 900; color: #0f172a;">${data.scores?.commuteRealityScore ?? 'N/A'}<span style="font-size: 10px; font-weight: 400; color: #64748b;">/100</span></div>
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 5px; text-align: center;">
+                  <div style="font-size: 9px; color: #64748b; font-weight: 600; text-transform: uppercase;">Walk Reality</div>
+                  <div style="font-size: 15px; font-weight: 900;">${data.scores?.commuteRealityScore ?? 'N/A'}</div>
                 </div>
               </div>
-
-              <div style="font-size: 11px; background: #f1f5f9; padding: 6px 8px; border-radius: 6px; line-height: 1.4; color: #334155;">
-                🏥 <strong>${data.breakdowns?.civic?.hospitalsNearby ?? 0}</strong> Hospitals &bull; 
-                🏫 <strong>${data.breakdowns?.civic?.schoolsNearby ?? 0}</strong> Schools &bull; 
-                🛒 <strong>${data.breakdowns?.civic?.groceryHubs ?? 0}</strong> Marts &bull;
-                💊 <strong>${data.breakdowns?.civic?.chemistShops ?? 0}</strong> Chemists
+              <div style="font-size: 11px; background: #f1f5f9; padding: 6px; border-radius: 6px; color: #334155;">
+                🏥 ${data.breakdowns?.civic?.hospitalsNearby ?? 0} &bull; 🏫 ${data.breakdowns?.civic?.schoolsNearby ?? 0} &bull; 🛒 ${data.breakdowns?.civic?.groceryHubs ?? 0} &bull; 💊 ${data.breakdowns?.civic?.chemistShops ?? 0}
               </div>
             </div>
           `;
@@ -331,7 +421,6 @@ export default function GroundTruthDashboard() {
       {/* Control & Results Sidebar */}
       <div className="w-full lg:w-[460px] h-full bg-slate-900 border-r border-slate-800 flex flex-col justify-between shadow-2xl z-20 overflow-y-auto">
         <div className="p-6">
-          {/* Header */}
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center space-x-2">
               <span className="text-emerald-400 font-black text-2xl tracking-wider">GROUNDTRUTH</span>
@@ -341,7 +430,6 @@ export default function GroundTruthDashboard() {
             </div>
           </div>
 
-          {/* Form Inputs */}
           <div className="space-y-4">
             <div>
               <div className="flex justify-between items-center mb-1">
@@ -359,7 +447,10 @@ export default function GroundTruthDashboard() {
               <input
                 type="text"
                 value={address}
-                onChange={(e) => setAddress(e.target.value)}
+                onChange={(e) => {
+                  setAddress(e.target.value);
+                  handleInputChange();
+                }}
                 onKeyDown={handleAddressSearch}
                 placeholder="Type location & press Enter"
                 className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 text-sm focus:border-emerald-500 focus:outline-none transition"
@@ -392,7 +483,10 @@ export default function GroundTruthDashboard() {
                 max="5"
                 step="0.5"
                 value={distanceKm}
-                onChange={(e) => setDistanceKm(parseFloat(e.target.value))}
+                onChange={(e) => {
+                  setDistanceKm(parseFloat(e.target.value));
+                  handleInputChange();
+                }}
                 className="w-full accent-emerald-500 bg-slate-800 rounded-lg cursor-pointer"
               />
               <div className="flex justify-between text-[10px] text-slate-500 font-mono mt-0.5">
@@ -405,9 +499,17 @@ export default function GroundTruthDashboard() {
             <button
               onClick={runAudit}
               disabled={loading}
-              className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold py-3 rounded-lg transition duration-200 disabled:opacity-50 cursor-pointer text-sm uppercase tracking-wider"
+              className={`w-full font-bold py-3 rounded-lg transition duration-200 disabled:opacity-50 cursor-pointer text-sm uppercase tracking-wider ${
+                isInputStale
+                  ? 'bg-emerald-400 hover:bg-emerald-500 text-slate-950 ring-2 ring-emerald-300 ring-offset-2 ring-offset-slate-900 animate-pulse'
+                  : 'bg-emerald-500 hover:bg-emerald-600 text-slate-950'
+              }`}
             >
-              {loading ? 'Auditing Spatial Reality...' : 'Generate GroundTruth Report'}
+              {loading
+                ? 'Auditing Spatial Reality...'
+                : isInputStale
+                ? 'Generate Updated Report'
+                : 'Generate GroundTruth Report'}
             </button>
           </div>
 
@@ -419,7 +521,7 @@ export default function GroundTruthDashboard() {
                   Verified Summary
                 </h3>
                 <span className="text-[11px] text-emerald-400 bg-emerald-950 border border-emerald-800 px-2 py-0.5 rounded-full font-mono">
-                  VISUALIZED ON MAP
+                  POIs PLOTTED ON MAP
                 </span>
               </div>
 
@@ -573,20 +675,75 @@ export default function GroundTruthDashboard() {
         </div>
       </div>
 
-      {/* Main Map Viewport with Visual Overlay Controls */}
+      {/* Main Map Viewport */}
       <div className="flex-1 h-[50vh] lg:h-full relative cursor-crosshair">
         <div ref={mapContainer} className="w-full h-full" />
-        
-        {/* Floating Map Legend Indicator */}
+
+        {/* POI Filter Toolbar (Active after audit) */}
+        {auditResult && (
+          <div className="absolute top-4 left-4 bg-slate-900/90 backdrop-blur border border-slate-800 p-2 rounded-xl text-xs text-slate-200 shadow-2xl flex items-center space-x-2 z-10">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider pl-1">Map POIs:</span>
+            <button
+              type="button"
+              onClick={() => toggleFilter('hospital')}
+              className={`px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center space-x-1 transition cursor-pointer ${
+                visibleFilters.hospital
+                  ? 'bg-rose-950/80 border-rose-700 text-rose-300'
+                  : 'bg-slate-800 border-slate-700 text-slate-500 line-through'
+              }`}
+            >
+              <span>🏥</span>
+              <span>Hospitals</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleFilter('school')}
+              className={`px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center space-x-1 transition cursor-pointer ${
+                visibleFilters.school
+                  ? 'bg-blue-950/80 border-blue-700 text-blue-300'
+                  : 'bg-slate-800 border-slate-700 text-slate-500 line-through'
+              }`}
+            >
+              <span>🏫</span>
+              <span>Schools</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleFilter('grocery')}
+              className={`px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center space-x-1 transition cursor-pointer ${
+                visibleFilters.grocery
+                  ? 'bg-emerald-950/80 border-emerald-700 text-emerald-300'
+                  : 'bg-slate-800 border-slate-700 text-slate-500 line-through'
+              }`}
+            >
+              <span>🛒</span>
+              <span>Marts</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleFilter('pharmacy')}
+              className={`px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center space-x-1 transition cursor-pointer ${
+                visibleFilters.pharmacy
+                  ? 'bg-purple-950/80 border-purple-700 text-purple-300'
+                  : 'bg-slate-800 border-slate-700 text-slate-500 line-through'
+              }`}
+            >
+              <span>💊</span>
+              <span>Pharmacies</span>
+            </button>
+          </div>
+        )}
+
+        {/* Dynamic Legend */}
         {auditResult && (
           <div className="absolute top-4 right-4 bg-slate-900/90 backdrop-blur border border-slate-800 px-3 py-2 rounded-xl text-[11px] text-slate-300 shadow-xl flex items-center space-x-3 pointer-events-none z-10">
             <div className="flex items-center space-x-1.5">
-              <span className="w-3 h-3 rounded-full bg-emerald-500/40 border border-emerald-400 inline-block" />
-              <span>{distanceKm} km Reach Boundary</span>
+              <span className="w-3 h-3 rounded-full bg-emerald-500/30 border border-emerald-400 inline-block" />
+              <span>{distanceKm} km Isochrone</span>
             </div>
             <div className="flex items-center space-x-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block" />
-              <span>Target Coordinates</span>
+              <span>Center</span>
             </div>
           </div>
         )}
