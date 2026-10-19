@@ -261,7 +261,7 @@ export default function GroundTruthDashboard() {
     amenityMarkersRef.current = [];
 
     const maplibregl = maplibreglRef.current;
-    if (!map.current || !maplibregl || !points) return;
+    if (!map.current || !maplibregl || !Array.isArray(points)) return;
 
     const typeConfig: Record<string, { color: string; icon: string; label: string }> = {
       hospital: { color: '#ef4444', icon: '🏥', label: 'Hospital/Clinic' },
@@ -274,14 +274,21 @@ export default function GroundTruthDashboard() {
     };
 
     points.forEach((pt: any) => {
+      // Validate that coordinates exist and are numeric
+      const lat = typeof pt.lat === 'number' ? pt.lat : parseFloat(pt.lat);
+      const lng = typeof pt.lng === 'number' ? pt.lng : parseFloat(pt.lng);
+
+      if (isNaN(lat) || isNaN(lng)) return;
+
       const cfg = typeConfig[pt.type] || { color: '#64748b', icon: '📍', label: 'Amenity' };
 
-      const distanceMeters = calculateDistanceMeters(coords.lat, coords.lng, pt.lat, pt.lng);
-      const walkingMinutes = Math.max(1, Math.round(distanceMeters / 80));
+      // Calculate actual walking distance from target coords
+      const distanceMeters = calculateDistanceMeters(coords.lat, coords.lng, lat, lng);
+      const walkingMinutes = Math.max(1, Math.round(distanceMeters / 80)); // 80m/min pace (~4.8 km/h)
       const formattedDistance =
         distanceMeters >= 1000
           ? `${(distanceMeters / 1000).toFixed(2)} km`
-          : `${distanceMeters} meters`;
+          : `${distanceMeters} m`;
 
       const el = document.createElement('div');
       el.className = 'amenity-marker';
@@ -300,7 +307,7 @@ export default function GroundTruthDashboard() {
       el.innerHTML = cfg.icon;
 
       const tooltipHtml = `
-        <div style="font-family: system-ui, sans-serif; padding: 4px; color: #0f172a; min-width: 190px;">
+        <div style="font-family: system-ui, sans-serif; padding: 4px; color: #0f172a; min-width: 180px;">
           <div style="font-size: 10px; color: ${cfg.color}; font-weight: 800; text-transform: uppercase;">
             ${cfg.label}
           </div>
@@ -309,7 +316,7 @@ export default function GroundTruthDashboard() {
           </div>
           <div style="font-size: 11px; color: #475569; margin-top: 4px; border-top: 1px solid #e2e8f0; padding-top: 4px; display: flex; justify-content: space-between;">
             <span>🚶 <strong>${formattedDistance}</strong></span>
-            <span>⏱️ <strong>~${walkingMinutes} min</strong></span>
+            <span>⏱️ <strong>~${walkingMinutes} min walk</strong></span>
           </div>
         </div>
       `;
@@ -322,7 +329,7 @@ export default function GroundTruthDashboard() {
           closeButton: false,
           closeOnClick: false,
         })
-          .setLngLat([pt.lng, pt.lat])
+          .setLngLat([lng, lat]) // Explicit [lng, lat] for MapLibre
           .setHTML(tooltipHtml)
           .addTo(map.current);
       });
@@ -334,7 +341,7 @@ export default function GroundTruthDashboard() {
         }
       });
 
-      // Click Tooltip Trigger (does not move target location marker)
+      // Click Tooltip Trigger
       el.addEventListener('click', (event) => {
         event.stopPropagation();
         event.preventDefault();
@@ -345,13 +352,14 @@ export default function GroundTruthDashboard() {
           closeButton: true,
           closeOnClick: false,
         })
-          .setLngLat([pt.lng, pt.lat])
+          .setLngLat([lng, lat]) // Explicit [lng, lat] for MapLibre
           .setHTML(tooltipHtml)
           .addTo(map.current);
       });
 
+      // Pin placed strictly using [lng, lat]
       const mapMarker = new maplibregl.Marker({ element: el })
-        .setLngLat([pt.lng, pt.lat])
+        .setLngLat([lng, lat])
         .addTo(map.current);
 
       amenityMarkersRef.current.push(mapMarker);
