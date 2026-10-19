@@ -16,15 +16,39 @@ export default function GroundTruthDashboard() {
   useEffect(() => {
     if (map.current || !mapContainer.current) return;
 
-    // Must be the local relative path so the browser loads it from groundtruth-kappa.vercel.app
     if (maplibregl.config) {
       maplibregl.config.WORKER_URL = '/maplibre-gl-csp-worker.js';
     }
 
-    // Free OpenStreetMap Carto style (Zero license fees)
+    // Direct standard OpenStreetMap raster style (Zero vector worker bugs)
+    const rasterStyle: maplibregl.StyleSpecification = {
+      version: 8,
+      sources: {
+        'osm-tiles': {
+          type: 'raster',
+          tiles: [
+            'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
+            'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
+            'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png'
+          ],
+          tileSize: 256,
+          attribution: '&copy; OpenStreetMap Contributors',
+        },
+      },
+      layers: [
+        {
+          id: 'osm-tiles-layer',
+          type: 'raster',
+          source: 'osm-tiles',
+          minzoom: 0,
+          maxzoom: 19,
+        },
+      ],
+    };
+
     map.current = new maplibregl.Map({
       container: mapContainer.current,
-      style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+      style: rasterStyle,
       center: [77.5946, 12.9716],
       zoom: 13,
     });
