@@ -16,11 +16,7 @@ export const metadata: Metadata = {
   title: "GroundTruth | Empirical Due Diligence & Commute Verification",
   description: "Autonomous geospatial intelligence verifying real estate marketing claims, true pedestrian isochrones, and civic infrastructure.",
   icons: {
-    icon: [
-      { url: "/favicon.ico", type: "image/x-icon" }
-    ],
-    shortcut: ["/favicon.ico"],
-    apple: ["/favicon.ico"],
+    icon: "/favicon.ico",
   },
 };
 
