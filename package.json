@@ -15,7 +15,7 @@
     "@upstash/qstash": "^2.12.0",
     "@upstash/redis": "^1.39.0",
     "h3-js": "^4.5.0",
-    "maplibre-gl": "^6.14.0",
+    "maplibre-gl": "^6.15.0",
     "next": "16.4.2",
     "react": "19.3.0",
     "react-dom": "19.3.0",
