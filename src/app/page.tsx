@@ -16,16 +16,16 @@ export default function GroundTruthDashboard() {
   useEffect(() => {
     if (map.current || !mapContainer.current) return;
 
-    // Configure the worker URL on the extensible config object
+    // Must be the local relative path so the browser loads it from groundtruth-kappa.vercel.app
     if (maplibregl.config) {
-      maplibregl.config.WORKER_URL = 'https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl-csp-worker.js';
+      maplibregl.config.WORKER_URL = '/maplibre-gl-csp-worker.js';
     }
 
     // Free OpenStreetMap Carto style (Zero license fees)
     map.current = new maplibregl.Map({
       container: mapContainer.current,
       style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
-      center: [77.5946, 12.9716], // Default Bengaluru
+      center: [77.5946, 12.9716],
       zoom: 13,
     });
 
