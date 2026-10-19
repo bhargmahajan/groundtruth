@@ -2,13 +2,11 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { GeospatialEngine } from '@/lib/geospatial/GeospatialEngine';
 import { DatabaseClient } from '@/lib/database/DatabaseClient';
-import { AIClaimExtractor } from '@/lib/nlp/AIClaimExtractor';
 
 const AuditRequestSchema = z.object({
   address: z.string().min(2),
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
-  rawListingText: z.string().optional().default(''),
   distanceKm: z.number().min(0.5).max(10).optional().default(2),
 });
 
@@ -78,7 +76,6 @@ export async function POST(request: Request) {
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
-    const aiExtractor = new AIClaimExtractor(process.env.GEMINI_API_KEY!);
 
     const radiusMeters = validated.distanceKm * 1000;
     const h3Index = geoEngine.getH3Index({
@@ -86,22 +83,20 @@ export async function POST(request: Request) {
       longitude: validated.longitude,
     });
 
-    // 1. Fetch amenities and isochrone concurrently
-    // Average walking speed ~4.8 km/h = 1.33 m/s. Range (s) = radiusMeters / 1.33
+    // Average walking speed ~4.8 km/h = 1.33 m/s
     const rangeSeconds = Math.min(Math.round(radiusMeters / 1.33), 3600);
 
-    const [isochrone, claims, amenities] = await Promise.all([
+    const [isochrone, amenities] = await Promise.all([
       geoEngine.fetchWalkingIsochrone(
         { latitude: validated.latitude, longitude: validated.longitude },
         rangeSeconds
       ),
-      aiExtractor.extractClaims(validated.rawListingText),
       fetchNearbyAmenities(validated.latitude, validated.longitude, radiusMeters),
     ]);
 
-    // 2. Compute Civic Infrastructure Score
+    // 1. Civic Infrastructure Score
     let civicScore: number | 'No data' = 'No data';
-    let civicBreakdown: Record<string, string | number> = {
+    const civicBreakdown: Record<string, string | number> = {
       hospitalsNearby: 'No data',
       schoolsNearby: 'No data',
       groceryHubs: 'No data',
@@ -124,23 +119,23 @@ export async function POST(request: Request) {
       civicScore = Math.max(20, Math.min(rawCivic, 100));
     }
 
-    // 3. Compute Neighbourhood Score
+    // 2. Neighbourhood Score
     let neighbourhoodScore: number | 'No data' = 'No data';
-    let neighbourhoodBreakdown: Record<string, string | number> = {
+    const neighbourhoodBreakdown: Record<string, string | number> = {
       schoolingQuality: amenities && amenities.schools > 0 ? 'Tier-1 & Tier-2 CBSE/ICSE clusters' : 'No data',
       crimeStatistics: 'Low to Moderate (Active police beat corridor)',
       waterAvailability: 'Tanker-supplemented municipal supply',
       powerOutageFrequency: '< 2 hrs/month average',
-      futureInfrastructurePlans: 'Planned Metro Phase-3 / Peripheral Road Extension',
+      futureInfrastructurePlans: 'Planned Metro Corridor / Arterial Road Extension',
       dumpWasteOrSewageCanal: amenities && amenities.drainsOrDumps > 0 ? `${amenities.drainsOrDumps} open drains/nullahs detected` : 'No open dump/canal within radius',
     };
 
     if (amenities) {
       const dumpPenalty = amenities.drainsOrDumps * 12;
-      neighbourhoodScore = Math.max(30, 85 - dumpPenalty);
+      neighbourhoodScore = Math.max(30, 88 - dumpPenalty);
     }
 
-    // 4. Compute Environmental Score
+    // 3. Environmental Score & Thermal Friction
     const heatFriction = geoEngine.calculateHeatFrictionMultiplier({
       latitude: validated.latitude,
       longitude: validated.longitude,
@@ -150,24 +145,14 @@ export async function POST(request: Request) {
     const environmentalBreakdown = {
       monsoonVulnerability: amenities && amenities.drainsOrDumps > 1 ? 'High (Prone to local backflow/waterlogging)' : 'Moderate/Low',
       airQualityIndex: 'AQI 115 (Moderate - Urban Background)',
-      generalTemperature: '26°C - 32°C (Solar exposure penalty active)',
-      thermalHeatPenalty: `${((heatFriction - 1) * 100).toFixed(0)}% speed reduction under direct sun`,
+      generalTemperature: '26°C - 32°C (Solar exposure active)',
+      thermalHeatPenalty: `${((heatFriction - 1) * 100).toFixed(0)}% walking speed reduction under direct sun`,
     };
 
-    // 5. Compute Commute Reality Score
-    let commuteRealityScore = 80;
-    if (claims.length > 0) {
-      // If listing claims an unrealistically short time, apply discrepancy penalty
-      const firstClaim = claims[0];
-      const claimedMins = firstClaim.claimed_time_minutes;
-      const actualEstMins = Math.round((validated.distanceKm / 4.8) * 60 * heatFriction);
+    // 4. Commute Reality Score (Friction & Walkability Index)
+    const commuteRealityScore = Math.max(40, Math.round(95 - (heatFriction - 1) * 50 - (validated.distanceKm > 3 ? 15 : 0)));
 
-      if (claimedMins < actualEstMins * 0.6) {
-        commuteRealityScore = Math.max(30, Math.round((claimedMins / actualEstMins) * 100));
-      }
-    }
-
-    // Persist zone cache
+    // Cache results in PostGIS
     await dbClient.saveHexZone(
       h3Index,
       validated.longitude,
@@ -180,7 +165,6 @@ export async function POST(request: Request) {
       h3Index,
       selectedDistanceKm: validated.distanceKm,
       isochrone: isochrone.geometry,
-      extractedClaims: claims,
       scores: {
         civicInfrastructureScore: civicScore,
         neighbourhoodScore: neighbourhoodScore,

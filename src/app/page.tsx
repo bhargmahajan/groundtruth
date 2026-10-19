@@ -15,9 +15,6 @@ export default function GroundTruthDashboard() {
   });
 
   const [address, setAddress] = useState<string>('MG Road, Bengaluru');
-  const [listingText, setListingText] = useState<string>(
-    'Spacious 3BHK flat, just 5 mins walk to metro and commercial tech hubs.'
-  );
   const [distanceKm, setDistanceKm] = useState<number>(2);
   const [loading, setLoading] = useState<boolean>(false);
   const [showLocationModal, setShowLocationModal] = useState<boolean>(true);
@@ -38,9 +35,6 @@ export default function GroundTruthDashboard() {
     }
   };
 
-  /**
-   * Browser Location Handlers
-   */
   const handleAllowLocation = () => {
     setShowLocationModal(false);
     if ('geolocation' in navigator) {
@@ -54,7 +48,6 @@ export default function GroundTruthDashboard() {
           reverseGeocode(lat, lng);
         },
         () => {
-          // If browser or OS blocks it, stay on default
           reverseGeocode(coords.lat, coords.lng);
         },
         { enableHighAccuracy: true, timeout: 8000 }
@@ -67,9 +60,6 @@ export default function GroundTruthDashboard() {
     reverseGeocode(coords.lat, coords.lng);
   };
 
-  /**
-   * Initialize MapLibre Map
-   */
   useEffect(() => {
     let isMounted = true;
 
@@ -126,12 +116,14 @@ export default function GroundTruthDashboard() {
         .setLngLat([coords.lng, coords.lat])
         .addTo(map.current);
 
+      // Drag listener: Updates location coordinates and address
       marker.current.on('dragend', () => {
         const lngLat = marker.current.getLngLat();
         setCoords({ lat: lngLat.lat, lng: lngLat.lng });
         reverseGeocode(lngLat.lat, lngLat.lng);
       });
 
+      // Map Click listener: Move marker to clicked point
       map.current.on('click', (e: any) => {
         const { lng, lat } = e.lngLat;
         marker.current.setLngLat([lng, lat]);
@@ -167,7 +159,7 @@ export default function GroundTruthDashboard() {
           if (marker.current) marker.current.setLngLat([newLng, newLat]);
         }
       } catch (err) {
-        console.error('Geocoding error:', err);
+        console.error('Search forward geocoding failed:', err);
       }
     }
   };
@@ -182,7 +174,6 @@ export default function GroundTruthDashboard() {
           address,
           latitude: coords.lat,
           longitude: coords.lng,
-          rawListingText: listingText,
           distanceKm,
         }),
       });
@@ -244,14 +235,14 @@ export default function GroundTruthDashboard() {
     <main className="flex flex-col lg:flex-row h-screen w-screen overflow-hidden font-sans bg-slate-950 text-slate-100">
       {/* Geolocation Decision Modal */}
       {showLocationModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl">
             <div className="flex items-center space-x-3 mb-4">
               <span className="text-2xl">📍</span>
               <h3 className="text-lg font-bold text-white">Enable Accurate Location?</h3>
             </div>
             <p className="text-sm text-slate-300 mb-6 leading-relaxed">
-              GroundTruth uses your precise coordinates to audit local amenities, monsoon waterlogging risks, and walking isochrones. Would you like to use your current GPS location or continue with the default location?
+              GroundTruth uses your precise coordinates to audit local amenities, monsoon waterlogging risks, and walking boundaries. Would you like to use your current GPS location or continue with the default location?
             </p>
             <div className="flex space-x-3 justify-end">
               <button
@@ -281,7 +272,7 @@ export default function GroundTruthDashboard() {
             <div className="flex items-center space-x-2">
               <span className="text-emerald-400 font-black text-2xl tracking-wider">GROUNDTRUTH</span>
               <span className="text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800 px-2 py-0.5 rounded-full font-mono uppercase">
-                AUDITOR
+                GEOSPATIAL
               </span>
             </div>
           </div>
@@ -291,14 +282,14 @@ export default function GroundTruthDashboard() {
             <div>
               <div className="flex justify-between items-center mb-1">
                 <label className="text-xs uppercase text-slate-400 font-bold tracking-wider">
-                  Target Location
+                  Target Location (Click Map or Search)
                 </label>
                 <button
                   type="button"
                   onClick={handleAllowLocation}
                   className="text-xs text-emerald-400 hover:underline flex items-center space-x-1"
                 >
-                  <span>📍 Locate Me</span>
+                  <span>📍 GPS Locate</span>
                 </button>
               </div>
               <input
@@ -306,7 +297,7 @@ export default function GroundTruthDashboard() {
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
                 onKeyDown={handleAddressSearch}
-                placeholder="Address (Press Enter to search)"
+                placeholder="Type location & press Enter"
                 className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 text-sm focus:border-emerald-500 focus:outline-none transition"
               />
               <div className="flex justify-between text-[11px] text-slate-500 mt-1 font-mono">
@@ -318,12 +309,12 @@ export default function GroundTruthDashboard() {
                     if (map.current) map.current.flyTo({ center: [coords.lng, coords.lat], zoom: 15 });
                   }}
                 >
-                  Recenter Map
+                  Center Pin
                 </span>
               </div>
             </div>
 
-            {/* Distance Slider */}
+            {/* Walking Distance Slider */}
             <div>
               <div className="flex justify-between text-xs mb-1">
                 <label className="uppercase text-slate-400 font-bold tracking-wider">
@@ -347,25 +338,12 @@ export default function GroundTruthDashboard() {
               </div>
             </div>
 
-            <div>
-              <label className="text-xs uppercase text-slate-400 font-bold tracking-wider">
-                Listing Claims / Ad Copy
-              </label>
-              <textarea
-                rows={3}
-                value={listingText}
-                onChange={(e) => setListingText(e.target.value)}
-                placeholder="Paste broker marketing claims here..."
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 mt-1 text-sm focus:border-emerald-500 focus:outline-none transition"
-              />
-            </div>
-
             <button
               onClick={runAudit}
               disabled={loading}
               className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold py-3 rounded-lg transition duration-200 disabled:opacity-50 cursor-pointer text-sm uppercase tracking-wider"
             >
-              {loading ? 'Analyzing Spatial Reality...' : 'Generate GroundTruth Report'}
+              {loading ? 'Auditing Spatial Reality...' : 'Generate GroundTruth Report'}
             </button>
           </div>
 
@@ -376,7 +354,7 @@ export default function GroundTruthDashboard() {
                 GroundTruth Verified Scores
               </h3>
 
-              {/* 4 Core Score Badges */}
+              {/* 4 Core Score Cards */}
               <div className="grid grid-cols-2 gap-2.5">
                 <div className={`p-3 rounded-xl border ${getScoreBadgeColor(auditResult.scores?.civicInfrastructureScore)}`}>
                   <div className="text-[11px] font-medium opacity-80 uppercase">Civic Infra</div>
@@ -411,7 +389,7 @@ export default function GroundTruthDashboard() {
                 </div>
               </div>
 
-              {/* Tab Navigation for Detailed Breakdown */}
+              {/* Breakdown Tab Switcher */}
               <div className="flex border-b border-slate-800 pt-2 text-xs font-semibold">
                 <button
                   type="button"
@@ -436,8 +414,8 @@ export default function GroundTruthDashboard() {
                 </button>
               </div>
 
-              {/* Detailed Breakdown Content */}
-              <div className="bg-slate-850 bg-slate-900/90 p-3.5 rounded-xl border border-slate-800 text-xs space-y-2">
+              {/* Tab Details */}
+              <div className="bg-slate-900/90 p-3.5 rounded-xl border border-slate-800 text-xs space-y-2">
                 {activeTab === 'civic' && (
                   <>
                     <div className="flex justify-between py-1 border-b border-slate-800/60">
@@ -517,30 +495,16 @@ export default function GroundTruthDashboard() {
                   </>
                 )}
               </div>
-
-              {/* Extracted Marketing Discrepancies */}
-              {auditResult.extractedClaims?.length > 0 && (
-                <div className="p-3 bg-amber-950/40 border border-amber-800/60 rounded-xl">
-                  <span className="text-xs font-bold text-amber-400 uppercase tracking-wide block mb-1">
-                    Audited Marketing Claims
-                  </span>
-                  {auditResult.extractedClaims.map((claim: any, idx: number) => (
-                    <p key={idx} className="text-xs text-amber-200/90 mt-1">
-                      • Claims {claim.claimed_time_minutes} min {claim.transport_mode} to &ldquo;{claim.destination}&rdquo;
-                    </p>
-                  ))}
-                </div>
-              )}
             </div>
           )}
         </div>
 
         <div className="p-4 border-t border-slate-800 text-[11px] text-slate-500 text-center">
-          GroundTruth © 2026. Empirical due diligence & geospatial intelligence.
+          GroundTruth © 2026. Zero-cost production geospatial architecture.
         </div>
       </div>
 
-      {/* Main Map Canvas */}
+      {/* Main Map Viewport */}
       <div ref={mapContainer} className="flex-1 h-[50vh] lg:h-full relative cursor-crosshair" />
     </main>
   );
