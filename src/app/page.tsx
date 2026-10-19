@@ -19,8 +19,12 @@ export default function GroundTruthDashboard() {
   );
   const [loading, setLoading] = useState<boolean>(false);
   const [locating, setLocating] = useState<boolean>(false);
+  const [isPermissionBlocked, setIsPermissionBlocked] = useState<boolean>(false);
   const [auditResult, setAuditResult] = useState<any>(null);
 
+  /**
+   * Reverse-geocodes coordinates into a human-readable address using Nominatim
+   */
   const reverseGeocode = async (lat: number, lng: number) => {
     try {
       const res = await fetch(
@@ -36,16 +40,28 @@ export default function GroundTruthDashboard() {
   };
 
   /**
-   * Explicit user-activated GPS trigger
-   * Browsers will always prompt the user when invoked via an explicit user click.
+   * User-activated GPS location request
    */
-  const requestCurrentLocation = () => {
+  const requestCurrentLocation = async () => {
     if (!('geolocation' in navigator)) {
       alert('Geolocation is not supported by your browser.');
       return;
     }
 
+    if ('permissions' in navigator) {
+      try {
+        const permissionStatus = await navigator.permissions.query({ name: 'geolocation' });
+        if (permissionStatus.state === 'denied') {
+          setIsPermissionBlocked(true);
+          return;
+        }
+      } catch {
+        // Fall back to getCurrentPosition if permissions API fails
+      }
+    }
+
     setLocating(true);
+    setIsPermissionBlocked(false);
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
@@ -66,25 +82,25 @@ export default function GroundTruthDashboard() {
       (error) => {
         setLocating(false);
         if (error.code === error.PERMISSION_DENIED) {
-          alert(
-            'Location access was blocked. Please click the padlock or sliders icon in your address bar and set Location to "Allow" or "Ask".'
-          );
+          setIsPermissionBlocked(true);
         } else {
-          alert(`Unable to retrieve location: ${error.message}`);
+          console.warn(`Location acquisition failed: ${error.message}`);
         }
       },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
     );
   };
 
   useEffect(() => {
     let isMounted = true;
 
+    // Dynamically import standard maplibre-gl
     import('maplibre-gl').then((maplibreglModule: any) => {
       if (!isMounted || !mapContainer.current || map.current) return;
 
       const maplibregl = maplibreglModule.default || maplibreglModule;
 
+      // Inline Blob Worker to prevent cross-origin/MIME-type errors
       try {
         if (maplibregl.workerUrl !== undefined) {
           const workerBlob = new Blob(
@@ -95,6 +111,7 @@ export default function GroundTruthDashboard() {
         }
       } catch {}
 
+      // Raster Style using OpenStreetMap tiles
       const rasterStyle: any = {
         version: 8,
         sources: {
@@ -127,6 +144,7 @@ export default function GroundTruthDashboard() {
         zoom: 14,
       });
 
+      // Interactive location marker
       marker.current = new maplibregl.Marker({
         draggable: true,
         color: '#10b981',
@@ -147,7 +165,7 @@ export default function GroundTruthDashboard() {
         reverseGeocode(lat, lng);
       });
 
-      // Attempt passive location detection on initial mount
+      // Passive check for geolocation on initial load
       if ('geolocation' in navigator) {
         navigator.geolocation.getCurrentPosition(
           (pos) => {
@@ -160,7 +178,7 @@ export default function GroundTruthDashboard() {
             reverseGeocode(lat, lng);
           },
           () => {
-            // Silently fall back to default coordinates if blocked on load
+            // Silently fallback to default coordinates if not granted
           },
           { enableHighAccuracy: true, timeout: 5000 }
         );
@@ -176,6 +194,9 @@ export default function GroundTruthDashboard() {
     };
   }, []);
 
+  /**
+   * Forward-geocodes manually typed address string
+   */
   const handleAddressSearch = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && address.trim()) {
       try {
@@ -203,6 +224,9 @@ export default function GroundTruthDashboard() {
     }
   };
 
+  /**
+   * Executes the GroundTruth spatial and NLP audit
+   */
   const runAudit = async () => {
     setLoading(true);
     try {
@@ -271,7 +295,7 @@ export default function GroundTruthDashboard() {
 
   return (
     <main className="flex h-screen w-screen overflow-hidden font-sans">
-      {/* Control Panel */}
+      {/* Left Control Panel */}
       <div className="w-1/3 h-full bg-slate-900 text-white p-6 flex flex-col justify-between shadow-2xl z-10 overflow-y-auto">
         <div>
           <div className="flex items-center space-x-2 mb-6">
@@ -282,6 +306,25 @@ export default function GroundTruthDashboard() {
           </div>
 
           <div className="space-y-4">
+            {/* Auto-Blocked Guidance Banner */}
+            {isPermissionBlocked && (
+              <div className="bg-amber-950/80 border border-amber-600/60 text-amber-200 text-xs p-3 rounded-lg mb-3 flex items-start justify-between">
+                <div>
+                  <span className="font-bold">⚠️ Location Auto-Blocked</span>
+                  <p className="text-[11px] text-amber-300/90 mt-0.5">
+                    Click the <strong>tune/lock icon</strong> on the left side of your browser address bar, reset <strong>Location</strong> to <em>Ask</em> or <em>Allow</em>, and refresh. You can also click anywhere on the map or type an address manually.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsPermissionBlocked(false)}
+                  className="text-amber-400 hover:text-white ml-2 text-sm font-bold"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
             <div>
               <div className="flex justify-between items-center mb-1">
                 <label className="text-xs uppercase text-slate-400 font-bold tracking-wider">
@@ -339,6 +382,7 @@ export default function GroundTruthDashboard() {
             </button>
           </div>
 
+          {/* Audit Output Results */}
           {auditResult && (
             <div className="mt-6 border-t border-slate-800 pt-4">
               <h3 className="text-sm font-semibold uppercase text-slate-400 mb-2">Audit Verdict</h3>
@@ -371,6 +415,7 @@ export default function GroundTruthDashboard() {
         </p>
       </div>
 
+      {/* Right Map Canvas */}
       <div ref={mapContainer} className="w-2/3 h-full relative cursor-crosshair" />
     </main>
   );
