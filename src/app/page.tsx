@@ -11,13 +11,19 @@ export default function GroundTruthDashboard() {
   const amenityPopupRef = useRef<any>(null);
   const maplibreglRef = useRef<any>(null);
 
+  // Default coordinates: Bengaluru
   const [coords, setCoords] = useState<{ lat: number; lng: number }>({
     lat: 12.9716,
     lng: 77.5946,
   });
+  const coordsRef = useRef(coords);
+  coordsRef.current = coords;
 
   const [address, setAddress] = useState<string>('MG Road, Bengaluru');
   const [distanceKm, setDistanceKm] = useState<number>(2);
+  const distanceRef = useRef(distanceKm);
+  distanceRef.current = distanceKm;
+
   const [loading, setLoading] = useState<boolean>(false);
   const [showLocationModal, setShowLocationModal] = useState<boolean>(true);
   const [auditResult, setAuditResult] = useState<any>(null);
@@ -127,8 +133,8 @@ export default function GroundTruthDashboard() {
           reverseGeocode(lat, lng);
         },
         () => {
-          reverseGeocode(coords.lat, coords.lng);
-          updateTargetMarker(coords.lng, coords.lat);
+          reverseGeocode(coordsRef.current.lat, coordsRef.current.lng);
+          updateTargetMarker(coordsRef.current.lng, coordsRef.current.lat);
         },
         { enableHighAccuracy: true, timeout: 8000 }
       );
@@ -137,8 +143,8 @@ export default function GroundTruthDashboard() {
 
   const handleDeclineLocation = () => {
     setShowLocationModal(false);
-    updateTargetMarker(coords.lng, coords.lat);
-    reverseGeocode(coords.lat, coords.lng);
+    updateTargetMarker(coordsRef.current.lng, coordsRef.current.lat);
+    reverseGeocode(coordsRef.current.lat, coordsRef.current.lng);
   };
 
   useEffect(() => {
@@ -187,12 +193,12 @@ export default function GroundTruthDashboard() {
       map.current = new maplibregl.Map({
         container: mapContainer.current,
         style: rasterStyle,
-        center: [coords.lng, coords.lat],
+        center: [coordsRef.current.lng, coordsRef.current.lat],
         zoom: 14,
       });
 
       map.current.on('load', () => {
-        updateTargetMarker(coords.lng, coords.lat);
+        updateTargetMarker(coordsRef.current.lng, coordsRef.current.lat);
       });
 
       map.current.on('click', (e: any) => {
@@ -264,7 +270,7 @@ export default function GroundTruthDashboard() {
 
       const cfg = typeConfig[pt.type] || { color: '#64748b', icon: '📍', label: 'Amenity' };
 
-      const distanceMeters = calculateDistanceMeters(coords.lat, coords.lng, lat, lng);
+      const distanceMeters = calculateDistanceMeters(coordsRef.current.lat, coordsRef.current.lng, lat, lng);
       const walkingMinutes = Math.max(1, Math.round(distanceMeters / 80));
       const formattedDistance =
         distanceMeters >= 1000
@@ -360,15 +366,18 @@ export default function GroundTruthDashboard() {
     setLoading(true);
     clearAmenityPins();
 
+    const currentCoords = coordsRef.current;
+    const currentDistance = distanceRef.current;
+
     try {
       const res = await fetch('/api/audit/request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           address,
-          latitude: coords.lat,
-          longitude: coords.lng,
-          distanceKm,
+          latitude: currentCoords.lat,
+          longitude: currentCoords.lng,
+          distanceKm: currentDistance,
         }),
       });
 
@@ -412,8 +421,8 @@ export default function GroundTruthDashboard() {
           });
         }
 
-        map.current.flyTo({ center: [coords.lng, coords.lat], zoom: 14 });
-        updateTargetMarker(coords.lng, coords.lat);
+        map.current.flyTo({ center: [currentCoords.lng, currentCoords.lat], zoom: 14 });
+        updateTargetMarker(currentCoords.lng, currentCoords.lat);
 
         if (data.amenityPoints) {
           renderAmenityPins(data.amenityPoints);
@@ -533,7 +542,9 @@ export default function GroundTruthDashboard() {
                 step="0.5"
                 value={distanceKm}
                 onChange={(e) => {
-                  setDistanceKm(parseFloat(e.target.value));
+                  const val = parseFloat(e.target.value);
+                  setDistanceKm(val);
+                  distanceRef.current = val;
                   clearAmenityPins();
                   setAuditResult(null);
                 }}
@@ -688,11 +699,11 @@ export default function GroundTruthDashboard() {
                       <span className="text-slate-400">Power Outages:</span>
                       <span className="font-semibold text-slate-200">{auditResult.breakdowns?.neighbourhood?.powerOutageFrequency ?? 'No data'}</span>
                     </div>
-                    <div className="flex justify-between py-1 border-b border-slate-800/60">
-                      <span className="text-slate-400">Waste Dumps / Drainage:</span>
+                    <div className="py-1 border-b border-slate-800/60">
+                      <span className="text-slate-400 block mb-0.5">Waste Dumps / Drainage:</span>
                       <span className="text-slate-300 text-[11px]">{auditResult.breakdowns?.neighbourhood?.dumpWasteOrSewageCanal ?? 'No data'}</span>
                     </div>
-                    <div className="py-1 border-b border-slate-800/60">
+                    <div className="py-1">
                       <span className="text-slate-400 block mb-0.5">Worship Places:</span>
                       <span className="text-slate-300 text-[11px]">{auditResult.breakdowns?.neighbourhood?.placesOfWorshipSummary ?? 'No data'}</span>
                     </div>
