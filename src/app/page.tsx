@@ -13,17 +13,14 @@ export default function GroundTruthDashboard() {
     lng: 77.5946,
   });
 
-  const [address, setAddress] = useState<string>('Detecting location...');
+  const [address, setAddress] = useState<string>('MG Road, Bengaluru');
   const [listingText, setListingText] = useState<string>(
     'Spacious 3BHK just 5 mins walk to Metro station.'
   );
   const [loading, setLoading] = useState<boolean>(false);
-  const [locating, setLocating] = useState<boolean>(true);
+  const [locating, setLocating] = useState<boolean>(false);
   const [auditResult, setAuditResult] = useState<any>(null);
 
-  /**
-   * Reverse-geocodes coordinates into a readable address using Nominatim
-   */
   const reverseGeocode = async (lat: number, lng: number) => {
     try {
       const res = await fetch(
@@ -38,17 +35,56 @@ export default function GroundTruthDashboard() {
     }
   };
 
+  /**
+   * Explicit user-activated GPS trigger
+   * Browsers will always prompt the user when invoked via an explicit user click.
+   */
+  const requestCurrentLocation = () => {
+    if (!('geolocation' in navigator)) {
+      alert('Geolocation is not supported by your browser.');
+      return;
+    }
+
+    setLocating(true);
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const userLat = position.coords.latitude;
+        const userLng = position.coords.longitude;
+
+        setCoords({ lat: userLat, lng: userLng });
+        setLocating(false);
+
+        if (map.current) {
+          map.current.flyTo({ center: [userLng, userLat], zoom: 15 });
+        }
+        if (marker.current) {
+          marker.current.setLngLat([userLng, userLat]);
+        }
+        reverseGeocode(userLat, userLng);
+      },
+      (error) => {
+        setLocating(false);
+        if (error.code === error.PERMISSION_DENIED) {
+          alert(
+            'Location access was blocked. Please click the padlock or sliders icon in your address bar and set Location to "Allow" or "Ask".'
+          );
+        } else {
+          alert(`Unable to retrieve location: ${error.message}`);
+        }
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  };
+
   useEffect(() => {
     let isMounted = true;
 
-    // Dynamically import standard maplibre-gl
     import('maplibre-gl').then((maplibreglModule: any) => {
       if (!isMounted || !mapContainer.current || map.current) return;
 
       const maplibregl = maplibreglModule.default || maplibreglModule;
 
-      // Fix "Worker failed to load": Use an inline Blob Worker
-      // This loads the worker completely from browser memory and never requests a .js file over the network
       try {
         if (maplibregl.workerUrl !== undefined) {
           const workerBlob = new Blob(
@@ -57,11 +93,8 @@ export default function GroundTruthDashboard() {
           );
           maplibregl.workerUrl = URL.createObjectURL(workerBlob);
         }
-      } catch {
-        // Fallback for environments where workerUrl configuration differs
-      }
+      } catch {}
 
-      // OpenStreetMap Raster Style (Requires zero vector worker decoding)
       const rasterStyle: any = {
         version: 8,
         sources: {
@@ -94,7 +127,6 @@ export default function GroundTruthDashboard() {
         zoom: 14,
       });
 
-      // Draggable Location Marker
       marker.current = new maplibregl.Marker({
         draggable: true,
         color: '#10b981',
@@ -115,34 +147,23 @@ export default function GroundTruthDashboard() {
         reverseGeocode(lat, lng);
       });
 
-      // HTML5 Geolocation with fallback
+      // Attempt passive location detection on initial mount
       if ('geolocation' in navigator) {
         navigator.geolocation.getCurrentPosition(
-          (position) => {
+          (pos) => {
             if (!isMounted) return;
-            const userLat = position.coords.latitude;
-            const userLng = position.coords.longitude;
-
-            setCoords({ lat: userLat, lng: userLng });
-            setLocating(false);
-
-            if (map.current) {
-              map.current.flyTo({ center: [userLng, userLat], zoom: 15 });
-            }
-            if (marker.current) {
-              marker.current.setLngLat([userLng, userLat]);
-            }
-            reverseGeocode(userLat, userLng);
+            const lat = pos.coords.latitude;
+            const lng = pos.coords.longitude;
+            setCoords({ lat, lng });
+            if (map.current) map.current.flyTo({ center: [lng, lat], zoom: 15 });
+            if (marker.current) marker.current.setLngLat([lng, lat]);
+            reverseGeocode(lat, lng);
           },
           () => {
-            setLocating(false);
-            reverseGeocode(coords.lat, coords.lng);
+            // Silently fall back to default coordinates if blocked on load
           },
-          { enableHighAccuracy: true, timeout: 6000 }
+          { enableHighAccuracy: true, timeout: 5000 }
         );
-      } else {
-        setLocating(false);
-        reverseGeocode(coords.lat, coords.lng);
       }
     });
 
@@ -264,13 +285,16 @@ export default function GroundTruthDashboard() {
             <div>
               <div className="flex justify-between items-center mb-1">
                 <label className="text-xs uppercase text-slate-400 font-bold tracking-wider">
-                  Target Location (GPS / Click Map)
+                  Target Location
                 </label>
-                {locating && (
-                  <span className="text-[10px] text-emerald-400 animate-pulse font-mono">
-                    Acquiring GPS...
-                  </span>
-                )}
+                <button
+                  type="button"
+                  onClick={requestCurrentLocation}
+                  disabled={locating}
+                  className="text-xs bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 px-2.5 py-1 rounded transition duration-150 flex items-center space-x-1 cursor-pointer disabled:opacity-50"
+                >
+                  <span>{locating ? 'Locating...' : '📍 Use GPS Location'}</span>
+                </button>
               </div>
               <input
                 type="text"
@@ -315,7 +339,6 @@ export default function GroundTruthDashboard() {
             </button>
           </div>
 
-          {/* Audit Output Results */}
           {auditResult && (
             <div className="mt-6 border-t border-slate-800 pt-4">
               <h3 className="text-sm font-semibold uppercase text-slate-400 mb-2">Audit Verdict</h3>
@@ -348,7 +371,6 @@ export default function GroundTruthDashboard() {
         </p>
       </div>
 
-      {/* Map Viewport */}
       <div ref={mapContainer} className="w-2/3 h-full relative cursor-crosshair" />
     </main>
   );
