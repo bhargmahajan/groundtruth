@@ -6,22 +6,53 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 export default function GroundTruthDashboard() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<any>(null);
+  const marker = useRef<any>(null);
+  const maplibreInstance = useRef<any>(null);
 
-  const [address, setAddress] = useState('MG Road, Bengaluru');
-  const [listingText, setListingText] = useState('Spacious 3BHK just 5 mins walk to Metro station.');
-  const [loading, setLoading] = useState(false);
+  // Geographic coordinates (Defaults to Bengaluru if GPS permission is denied)
+  const [coords, setCoords] = useState<{ lat: number; lng: number }>({
+    lat: 12.9716,
+    lng: 77.5946,
+  });
+
+  const [address, setAddress] = useState<string>('Detecting location...');
+  const [listingText, setListingText] = useState<string>(
+    'Spacious 3BHK just 5 mins walk to Metro station.'
+  );
+  const [loading, setLoading] = useState<boolean>(false);
+  const [locating, setLocating] = useState<boolean>(true);
   const [auditResult, setAuditResult] = useState<any>(null);
 
+  /**
+   * Reverse-geocodes coordinates into a human-readable address using OpenStreetMap Nominatim
+   */
+  const reverseGeocode = async (lat: number, lng: number) => {
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`
+      );
+      const data = await res.json();
+      if (data && data.display_name) {
+        setAddress(data.display_name);
+      }
+    } catch (err) {
+      console.warn('Reverse geocoding error:', err);
+      setAddress(`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+    }
+  };
+
+  /**
+   * Initialize MapLibre and request GPS coordinates on mount
+   */
   useEffect(() => {
     let isMounted = true;
 
-    // Dynamically load MapLibre on the client
-    import('maplibre-gl').then((maplibreglModule) => {
+    import('maplibre-gl/dist/maplibre-gl').then((maplibreglModule) => {
       if (!isMounted || !mapContainer.current || map.current) return;
 
-      const maplibregl = maplibreglModule;
+      const maplibregl = maplibreglModule.default || maplibreglModule;
+      maplibreInstance.current = maplibregl;
 
-      // Define standard raster style (eliminates vector tile worker discrepancies)
       const rasterStyle: any = {
         version: 8,
         sources: {
@@ -50,9 +81,63 @@ export default function GroundTruthDashboard() {
       map.current = new maplibregl.Map({
         container: mapContainer.current,
         style: rasterStyle,
-        center: [77.5946, 12.9716], // Default Bengaluru
-        zoom: 13,
+        center: [coords.lng, coords.lat],
+        zoom: 14,
       });
+
+      // Add a draggable marker for manual location adjustments
+      marker.current = new maplibregl.Marker({
+        draggable: true,
+        color: '#10b981',
+      })
+        .setLngLat([coords.lng, coords.lat])
+        .addTo(map.current);
+
+      // Listen to marker drag events
+      marker.current.on('dragend', () => {
+        const lngLat = marker.current.getLngLat();
+        setCoords({ lat: lngLat.lat, lng: lngLat.lng });
+        reverseGeocode(lngLat.lat, lngLat.lng);
+      });
+
+      // Allow users to click anywhere on the map to relocate the marker
+      map.current.on('click', (e: any) => {
+        const { lng, lat } = e.lngLat;
+        marker.current.setLngLat([lng, lat]);
+        setCoords({ lat, lng });
+        reverseGeocode(lat, lng);
+      });
+
+      // Auto-detect browser GPS location on load
+      if ('geolocation' in navigator) {
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            if (!isMounted) return;
+            const userLat = position.coords.latitude;
+            const userLng = position.coords.longitude;
+
+            setCoords({ lat: userLat, lng: userLng });
+            setLocating(false);
+
+            if (map.current) {
+              map.current.flyTo({ center: [userLng, userLat], zoom: 15 });
+            }
+            if (marker.current) {
+              marker.current.setLngLat([userLng, userLat]);
+            }
+            reverseGeocode(userLat, userLng);
+          },
+          (err) => {
+            console.warn('GPS permission denied or unavailable:', err.message);
+            setLocating(false);
+            reverseGeocode(coords.lat, coords.lng);
+          },
+          { enableHighAccuracy: true, timeout: 8000 }
+        );
+      } else {
+        setLocating(false);
+        reverseGeocode(coords.lat, coords.lng);
+      }
     });
 
     return () => {
@@ -64,6 +149,39 @@ export default function GroundTruthDashboard() {
     };
   }, []);
 
+  /**
+   * Geocode text address input if the user manually types a new location
+   */
+  const handleAddressSearch = async (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && address.trim()) {
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+            address
+          )}`
+        );
+        const data = await res.json();
+        if (data && data.length > 0) {
+          const newLat = parseFloat(data[0].lat);
+          const newLng = parseFloat(data[0].lon);
+
+          setCoords({ lat: newLat, lng: newLng });
+          if (map.current) {
+            map.current.flyTo({ center: [newLng, newLat], zoom: 15 });
+          }
+          if (marker.current) {
+            marker.current.setLngLat([newLng, newLat]);
+          }
+        }
+      } catch (err) {
+        console.error('Search forward geocoding failed:', err);
+      }
+    }
+  };
+
+  /**
+   * Execute the GroundTruth audit calculation
+   */
   const runAudit = async () => {
     setLoading(true);
     try {
@@ -72,8 +190,8 @@ export default function GroundTruthDashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           address,
-          latitude: 12.9756,
-          longitude: 77.6066,
+          latitude: coords.lat,
+          longitude: coords.lng,
           rawListingText: listingText,
         }),
       });
@@ -82,7 +200,6 @@ export default function GroundTruthDashboard() {
       setAuditResult(data);
 
       if (map.current && data.isochrone) {
-        // Remove existing layers if present
         if (map.current.getLayer('isochrone-line')) {
           map.current.removeLayer('isochrone-line');
         }
@@ -93,7 +210,6 @@ export default function GroundTruthDashboard() {
           map.current.removeSource('isochrone-source');
         }
 
-        // Add Isochrone Polygon to Map
         map.current.addSource('isochrone-source', {
           type: 'geojson',
           data: {
@@ -123,10 +239,10 @@ export default function GroundTruthDashboard() {
           },
         });
 
-        map.current.flyTo({ center: [77.6066, 12.9756], zoom: 14 });
+        map.current.flyTo({ center: [coords.lng, coords.lat], zoom: 14 });
       }
     } catch (err) {
-      console.error('Audit failed:', err);
+      console.error('Audit execution error:', err);
     } finally {
       setLoading(false);
     }
@@ -140,23 +256,45 @@ export default function GroundTruthDashboard() {
           <div className="flex items-center space-x-2 mb-6">
             <span className="text-emerald-400 font-black text-2xl tracking-wider">GROUNDTRUTH</span>
             <span className="text-xs bg-emerald-950 text-emerald-400 border border-emerald-800 px-2 py-0.5 rounded-full font-mono">
-              BETA
+              PRODUCTION
             </span>
           </div>
 
           <div className="space-y-4">
             <div>
-              <label className="text-xs uppercase text-slate-400 font-bold tracking-wider">Property Address</label>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-xs uppercase text-slate-400 font-bold tracking-wider">
+                  Target Location (GPS / Click to Move)
+                </label>
+                {locating && (
+                  <span className="text-[10px] text-emerald-400 animate-pulse font-mono">
+                    Acquiring GPS...
+                  </span>
+                )}
+              </div>
               <input
                 type="text"
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 mt-1 text-sm focus:border-emerald-500 focus:outline-none"
+                onKeyDown={handleAddressSearch}
+                placeholder="Type location & press Enter, or click anywhere on map"
+                className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 text-sm focus:border-emerald-500 focus:outline-none"
               />
+              <div className="flex justify-between text-[11px] text-slate-500 mt-1 font-mono">
+                <span>Lat: {coords.lat.toFixed(5)}</span>
+                <span>Lng: {coords.lng.toFixed(5)}</span>
+                <span className="text-emerald-500 hover:underline cursor-pointer" onClick={() => {
+                  if (map.current) map.current.flyTo({ center: [coords.lng, coords.lat], zoom: 15 });
+                }}>
+                  Center Pin
+                </span>
+              </div>
             </div>
 
             <div>
-              <label className="text-xs uppercase text-slate-400 font-bold tracking-wider">Listing Description (Ad Copy)</label>
+              <label className="text-xs uppercase text-slate-400 font-bold tracking-wider">
+                Listing Description (Ad Copy)
+              </label>
               <textarea
                 rows={4}
                 value={listingText}
@@ -208,7 +346,7 @@ export default function GroundTruthDashboard() {
       </div>
 
       {/* Right Map Canvas */}
-      <div ref={mapContainer} className="w-2/3 h-full relative" />
+      <div ref={mapContainer} className="w-2/3 h-full relative cursor-crosshair" />
     </main>
   );
 }
