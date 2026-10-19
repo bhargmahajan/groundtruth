@@ -47,21 +47,6 @@ export default function GroundTruthDashboard() {
     church: true,
   });
 
-  const calculateDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-    const R = 6371e3;
-    const p1 = (lat1 * Math.PI) / 180;
-    const p2 = (lat2 * Math.PI) / 180;
-    const dp = ((lat2 - lat1) * Math.PI) / 180;
-    const dl = ((lon2 - lon1) * Math.PI) / 180;
-
-    const a =
-      Math.sin(dp / 2) * Math.sin(dp / 2) +
-      Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) * Math.sin(dl / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-    return Math.round(R * c);
-  };
-
   const clearAmenityPins = () => {
     amenityMarkersRef.current.forEach((m) => m.remove());
     amenityMarkersRef.current = [];
@@ -269,8 +254,7 @@ export default function GroundTruthDashboard() {
       if (isNaN(lat) || isNaN(lng)) return;
 
       const cfg = typeConfig[pt.type] || { color: '#64748b', icon: '📍', label: 'Amenity' };
-
-      const distanceMeters = calculateDistanceMeters(coordsRef.current.lat, coordsRef.current.lng, lat, lng);
+      const distanceMeters = pt.distanceMeters ?? 0;
       const walkingMinutes = Math.max(1, Math.round(distanceMeters / 80));
       const formattedDistance =
         distanceMeters >= 1000
@@ -699,7 +683,7 @@ export default function GroundTruthDashboard() {
                       <span className="text-slate-400">Power Outages:</span>
                       <span className="font-semibold text-slate-200">{auditResult.breakdowns?.neighbourhood?.powerOutageFrequency ?? 'No data'}</span>
                     </div>
-                    <div className="py-1 border-b border-slate-800/60">
+                    <div className="flex justify-between py-1 border-b border-slate-800/60">
                       <span className="text-slate-400 block mb-0.5">Waste Dumps / Drainage:</span>
                       <span className="text-slate-300 text-[11px]">{auditResult.breakdowns?.neighbourhood?.dumpWasteOrSewageCanal ?? 'No data'}</span>
                     </div>
