@@ -1,0 +1,15 @@
+name: Supabase Database Keep-Alive
+
+on:
+  schedule:
+    # Runs every 4 days at 00:00 UTC
+    - cron: '0 0 */4 * *'
+  workflow_dispatch: # Allows manual trigger from GitHub UI
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Production Health Endpoint
+        run: |
+          curl -f -s "https://YOUR_VERCEL_PROJECT.vercel.app/api/health" || exit 1
