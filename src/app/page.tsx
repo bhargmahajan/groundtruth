@@ -11,7 +11,6 @@ export default function GroundTruthDashboard() {
   const amenityPopupRef = useRef<any>(null);
   const maplibreglRef = useRef<any>(null);
 
-  // Default coordinates: Bengaluru
   const [coords, setCoords] = useState<{ lat: number; lng: number }>({
     lat: 12.9716,
     lng: 77.5946,
@@ -24,7 +23,6 @@ export default function GroundTruthDashboard() {
   const [auditResult, setAuditResult] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'civic' | 'neighbourhood' | 'environment'>('civic');
 
-  // Filter toggles for amenity POIs
   const [visibleFilters, setVisibleFilters] = useState<{
     hospital: boolean;
     school: boolean;
@@ -58,19 +56,13 @@ export default function GroundTruthDashboard() {
     return Math.round(R * c);
   };
 
-  const clearExistingAuditVisuals = () => {
+  const clearAmenityPins = () => {
     amenityMarkersRef.current.forEach((m) => m.remove());
     amenityMarkersRef.current = [];
 
     if (amenityPopupRef.current) {
       amenityPopupRef.current.remove();
       amenityPopupRef.current = null;
-    }
-
-    if (map.current) {
-      if (map.current.getLayer('isochrone-line')) map.current.removeLayer('isochrone-line');
-      if (map.current.getLayer('isochrone-layer')) map.current.removeLayer('isochrone-layer');
-      if (map.current.getSource('isochrone-source')) map.current.removeSource('isochrone-source');
     }
   };
 
@@ -88,15 +80,11 @@ export default function GroundTruthDashboard() {
     }
   };
 
-  // Persistent Target Pin
-  const updateTargetMarkerPosition = (lng: number, lat: number) => {
-    if (!map.current) return;
-    const maplibregl = maplibreglRef.current;
-    if (!maplibregl) return;
+  const updateTargetMarker = (lng: number, lat: number) => {
+    if (!map.current || !maplibreglRef.current) return;
 
     if (!targetMarkerRef.current) {
       const el = document.createElement('div');
-      el.className = 'target-center-beacon';
       el.style.width = '24px';
       el.style.height = '24px';
       el.style.backgroundColor = '#10b981';
@@ -105,7 +93,7 @@ export default function GroundTruthDashboard() {
       el.style.boxShadow = '0 0 15px rgba(16, 185, 129, 0.9)';
       el.style.cursor = 'grab';
 
-      targetMarkerRef.current = new maplibregl.Marker({
+      targetMarkerRef.current = new maplibreglRef.current.Marker({
         element: el,
         draggable: true,
       })
@@ -115,7 +103,7 @@ export default function GroundTruthDashboard() {
       targetMarkerRef.current.on('dragend', () => {
         const lngLat = targetMarkerRef.current.getLngLat();
         setCoords({ lat: lngLat.lat, lng: lngLat.lng });
-        clearExistingAuditVisuals();
+        clearAmenityPins();
         setAuditResult(null);
         reverseGeocode(lngLat.lat, lngLat.lng);
       });
@@ -132,15 +120,15 @@ export default function GroundTruthDashboard() {
           const lat = pos.coords.latitude;
           const lng = pos.coords.longitude;
           setCoords({ lat, lng });
-          clearExistingAuditVisuals();
+          clearAmenityPins();
           setAuditResult(null);
           if (map.current) map.current.flyTo({ center: [lng, lat], zoom: 15 });
-          updateTargetMarkerPosition(lng, lat);
+          updateTargetMarker(lng, lat);
           reverseGeocode(lat, lng);
         },
         () => {
           reverseGeocode(coords.lat, coords.lng);
-          updateTargetMarkerPosition(coords.lng, coords.lat);
+          updateTargetMarker(coords.lng, coords.lat);
         },
         { enableHighAccuracy: true, timeout: 8000 }
       );
@@ -149,7 +137,7 @@ export default function GroundTruthDashboard() {
 
   const handleDeclineLocation = () => {
     setShowLocationModal(false);
-    updateTargetMarkerPosition(coords.lng, coords.lat);
+    updateTargetMarker(coords.lng, coords.lat);
     reverseGeocode(coords.lat, coords.lng);
   };
 
@@ -204,7 +192,7 @@ export default function GroundTruthDashboard() {
       });
 
       map.current.on('load', () => {
-        updateTargetMarkerPosition(coords.lng, coords.lat);
+        updateTargetMarker(coords.lng, coords.lat);
       });
 
       map.current.on('click', (e: any) => {
@@ -212,8 +200,8 @@ export default function GroundTruthDashboard() {
 
         const { lng, lat } = e.lngLat;
         setCoords({ lat, lng });
-        updateTargetMarkerPosition(lng, lat);
-        clearExistingAuditVisuals();
+        updateTargetMarker(lng, lat);
+        clearAmenityPins();
         setAuditResult(null);
         reverseGeocode(lat, lng);
       });
@@ -242,24 +230,19 @@ export default function GroundTruthDashboard() {
           const newLng = parseFloat(data[0].lon);
 
           setCoords({ lat: newLat, lng: newLng });
-          updateTargetMarkerPosition(newLng, newLat);
-          clearExistingAuditVisuals();
+          updateTargetMarker(newLng, newLat);
+          clearAmenityPins();
           setAuditResult(null);
           if (map.current) map.current.flyTo({ center: [newLng, newLat], zoom: 15 });
         }
       } catch (err) {
-        console.error('Search geocoding failed:', err);
+        console.error('Search error:', err);
       }
     }
   };
 
-  /**
-   * Places every amenity reported on the map and binds distance tooltips
-   */
   const renderAmenityPins = (points: any[]) => {
-    amenityMarkersRef.current.forEach((m) => m.remove());
-    amenityMarkersRef.current = [];
-
+    clearAmenityPins();
     const maplibregl = maplibreglRef.current;
     if (!map.current || !maplibregl || !Array.isArray(points)) return;
 
@@ -274,7 +257,6 @@ export default function GroundTruthDashboard() {
     };
 
     points.forEach((pt: any) => {
-      // Validate that coordinates exist and are numeric
       const lat = typeof pt.lat === 'number' ? pt.lat : parseFloat(pt.lat);
       const lng = typeof pt.lng === 'number' ? pt.lng : parseFloat(pt.lng);
 
@@ -282,9 +264,8 @@ export default function GroundTruthDashboard() {
 
       const cfg = typeConfig[pt.type] || { color: '#64748b', icon: '📍', label: 'Amenity' };
 
-      // Calculate actual walking distance from target coords
       const distanceMeters = calculateDistanceMeters(coords.lat, coords.lng, lat, lng);
-      const walkingMinutes = Math.max(1, Math.round(distanceMeters / 80)); // 80m/min pace (~4.8 km/h)
+      const walkingMinutes = Math.max(1, Math.round(distanceMeters / 80));
       const formattedDistance =
         distanceMeters >= 1000
           ? `${(distanceMeters / 1000).toFixed(2)} km`
@@ -321,7 +302,6 @@ export default function GroundTruthDashboard() {
         </div>
       `;
 
-      // Hover Tooltip Trigger
       el.addEventListener('mouseenter', () => {
         if (amenityPopupRef.current) amenityPopupRef.current.remove();
         amenityPopupRef.current = new maplibregl.Popup({
@@ -329,7 +309,7 @@ export default function GroundTruthDashboard() {
           closeButton: false,
           closeOnClick: false,
         })
-          .setLngLat([lng, lat]) // Explicit [lng, lat] for MapLibre
+          .setLngLat([lng, lat])
           .setHTML(tooltipHtml)
           .addTo(map.current);
       });
@@ -341,7 +321,6 @@ export default function GroundTruthDashboard() {
         }
       });
 
-      // Click Tooltip Trigger
       el.addEventListener('click', (event) => {
         event.stopPropagation();
         event.preventDefault();
@@ -352,12 +331,11 @@ export default function GroundTruthDashboard() {
           closeButton: true,
           closeOnClick: false,
         })
-          .setLngLat([lng, lat]) // Explicit [lng, lat] for MapLibre
+          .setLngLat([lng, lat])
           .setHTML(tooltipHtml)
           .addTo(map.current);
       });
 
-      // Pin placed strictly using [lng, lat]
       const mapMarker = new maplibregl.Marker({ element: el })
         .setLngLat([lng, lat])
         .addTo(map.current);
@@ -380,7 +358,7 @@ export default function GroundTruthDashboard() {
 
   const runAudit = async () => {
     setLoading(true);
-    clearExistingAuditVisuals();
+    clearAmenityPins();
 
     try {
       const res = await fetch('/api/audit/request', {
@@ -398,41 +376,45 @@ export default function GroundTruthDashboard() {
       setAuditResult(data);
 
       if (map.current && data.isochrone) {
-        map.current.addSource('isochrone-source', {
-          type: 'geojson',
-          data: {
-            type: 'Feature',
-            geometry: data.isochrone,
-            properties: {},
-          },
-        });
+        const sourceData = {
+          type: 'Feature',
+          geometry: data.isochrone,
+          properties: {},
+        };
 
-        map.current.addLayer({
-          id: 'isochrone-layer',
-          type: 'fill',
-          source: 'isochrone-source',
-          paint: {
-            'fill-color': '#10b981',
-            'fill-opacity': 0.22,
-          },
-        });
+        const existingSource = map.current.getSource('isochrone-source');
+        if (existingSource) {
+          existingSource.setData(sourceData);
+        } else {
+          map.current.addSource('isochrone-source', {
+            type: 'geojson',
+            data: sourceData,
+          });
 
-        map.current.addLayer({
-          id: 'isochrone-line',
-          type: 'line',
-          source: 'isochrone-source',
-          paint: {
-            'line-color': '#059669',
-            'line-width': 2.5,
-          },
-        });
+          map.current.addLayer({
+            id: 'isochrone-layer',
+            type: 'fill',
+            source: 'isochrone-source',
+            paint: {
+              'fill-color': '#10b981',
+              'fill-opacity': 0.22,
+            },
+          });
+
+          map.current.addLayer({
+            id: 'isochrone-line',
+            type: 'line',
+            source: 'isochrone-source',
+            paint: {
+              'line-color': '#059669',
+              'line-width': 2.5,
+            },
+          });
+        }
 
         map.current.flyTo({ center: [coords.lng, coords.lat], zoom: 14 });
+        updateTargetMarker(coords.lng, coords.lat);
 
-        // Maintain center marker visibility
-        updateTargetMarkerPosition(coords.lng, coords.lat);
-
-        // Render every reported amenity on the map
         if (data.amenityPoints) {
           renderAmenityPins(data.amenityPoints);
         }
@@ -453,7 +435,7 @@ export default function GroundTruthDashboard() {
 
   return (
     <main className="flex flex-col lg:flex-row h-screen w-screen overflow-hidden font-sans bg-slate-950 text-slate-100">
-      {/* Geolocation Modal */}
+      {/* Geolocation Decision Modal */}
       {showLocationModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl">
@@ -515,7 +497,7 @@ export default function GroundTruthDashboard() {
                 value={address}
                 onChange={(e) => {
                   setAddress(e.target.value);
-                  clearExistingAuditVisuals();
+                  clearAmenityPins();
                   setAuditResult(null);
                 }}
                 onKeyDown={handleAddressSearch}
@@ -536,7 +518,7 @@ export default function GroundTruthDashboard() {
               </div>
             </div>
 
-            {/* Walking Range Slider */}
+            {/* Walking Distance Slider */}
             <div>
               <div className="flex justify-between text-xs mb-1">
                 <label className="uppercase text-slate-400 font-bold tracking-wider">
@@ -552,7 +534,7 @@ export default function GroundTruthDashboard() {
                 value={distanceKm}
                 onChange={(e) => {
                   setDistanceKm(parseFloat(e.target.value));
-                  clearExistingAuditVisuals();
+                  clearAmenityPins();
                   setAuditResult(null);
                 }}
                 className="w-full accent-emerald-500 bg-slate-800 rounded-lg cursor-pointer"
@@ -706,7 +688,7 @@ export default function GroundTruthDashboard() {
                       <span className="text-slate-400">Power Outages:</span>
                       <span className="font-semibold text-slate-200">{auditResult.breakdowns?.neighbourhood?.powerOutageFrequency ?? 'No data'}</span>
                     </div>
-                    <div className="py-1 border-b border-slate-800/60">
+                    <div className="flex justify-between py-1 border-b border-slate-800/60">
                       <span className="text-slate-400 block mb-0.5">Waste Dump / Open Sewage Canal:</span>
                       <span className="text-amber-400 text-[11px]">{auditResult.breakdowns?.neighbourhood?.dumpWasteOrSewageCanal ?? 'No data'}</span>
                     </div>
@@ -847,7 +829,7 @@ export default function GroundTruthDashboard() {
           <div className="absolute top-4 right-4 bg-slate-900/90 backdrop-blur border border-slate-800 px-3 py-2 rounded-xl text-[11px] text-slate-300 shadow-xl flex items-center space-x-3 pointer-events-none z-10">
             <div className="flex items-center space-x-1.5">
               <span className="w-3 h-3 rounded-full bg-emerald-500/30 border border-emerald-400 inline-block" />
-              <span>{distanceKm} km Reach Boundary</span>
+              <span>{distanceKm} km Isochrone</span>
             </div>
             <div className="flex items-center space-x-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block" />
