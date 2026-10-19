@@ -7,8 +7,8 @@ export default function GroundTruthDashboard() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<any>(null);
   const marker = useRef<any>(null);
-  const activePopup = useRef<any>(null);
   const amenityMarkersRef = useRef<any[]>([]);
+  const amenityPopupRef = useRef<any>(null);
   const maplibreglRef = useRef<any>(null);
 
   // Default coordinates: Bengaluru
@@ -24,9 +24,6 @@ export default function GroundTruthDashboard() {
   const [auditResult, setAuditResult] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'civic' | 'neighbourhood' | 'environment'>('civic');
 
-  // Track whether input parameters have changed since last audit run
-  const [isInputStale, setIsInputStale] = useState<boolean>(false);
-
   const [visibleFilters, setVisibleFilters] = useState<{
     hospital: boolean;
     school: boolean;
@@ -39,29 +36,41 @@ export default function GroundTruthDashboard() {
     pharmacy: true,
   });
 
+  /**
+   * Calculates Haversine distance in meters between two lat/lng pairs
+   */
+  const calculateDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const R = 6371e3; // Earth radius in meters
+    const phi1 = (lat1 * Math.PI) / 180;
+    const phi2 = (lat2 * Math.PI) / 180;
+    const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
+    const deltaLambda = ((lon2 - lon1) * Math.PI) / 180;
+
+    const a =
+      Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+      Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return Math.round(R * c);
+  };
+
   const clearExistingAuditVisuals = () => {
-    // 1. Clear POI pins
+    // 1. Remove all Amenity POI Pins
     amenityMarkersRef.current.forEach((m) => m.remove());
     amenityMarkersRef.current = [];
 
-    // 2. Clear Popup
-    if (activePopup.current) {
-      activePopup.current.remove();
-      activePopup.current = null;
+    // 2. Remove any active tooltips
+    if (amenityPopupRef.current) {
+      amenityPopupRef.current.remove();
+      amenityPopupRef.current = null;
     }
 
-    // 3. Clear Map Isochrone Layers
+    // 3. Clear Map Isochrone Boundary Layers
     if (map.current) {
       if (map.current.getLayer('isochrone-line')) map.current.removeLayer('isochrone-line');
       if (map.current.getLayer('isochrone-layer')) map.current.removeLayer('isochrone-layer');
       if (map.current.getSource('isochrone-source')) map.current.removeSource('isochrone-source');
     }
-  };
-
-  const handleInputChange = () => {
-    setIsInputStale(true);
-    setAuditResult(null);
-    clearExistingAuditVisuals();
   };
 
   const reverseGeocode = async (lat: number, lng: number) => {
@@ -86,7 +95,8 @@ export default function GroundTruthDashboard() {
           const lat = pos.coords.latitude;
           const lng = pos.coords.longitude;
           setCoords({ lat, lng });
-          handleInputChange();
+          clearExistingAuditVisuals();
+          setAuditResult(null);
           if (map.current) map.current.flyTo({ center: [lng, lat], zoom: 15 });
           if (marker.current) marker.current.setLngLat([lng, lat]);
           reverseGeocode(lat, lng);
@@ -164,15 +174,20 @@ export default function GroundTruthDashboard() {
       marker.current.on('dragend', () => {
         const lngLat = marker.current.getLngLat();
         setCoords({ lat: lngLat.lat, lng: lngLat.lng });
-        handleInputChange();
+        clearExistingAuditVisuals();
+        setAuditResult(null);
         reverseGeocode(lngLat.lat, lngLat.lng);
       });
 
       map.current.on('click', (e: any) => {
+        // Prevent moving the target pin if user clicked an amenity marker
+        if (e.originalEvent?.defaultPrevented) return;
+
         const { lng, lat } = e.lngLat;
         marker.current.setLngLat([lng, lat]);
         setCoords({ lat, lng });
-        handleInputChange();
+        clearExistingAuditVisuals();
+        setAuditResult(null);
         reverseGeocode(lat, lng);
       });
     });
@@ -200,7 +215,8 @@ export default function GroundTruthDashboard() {
           const newLng = parseFloat(data[0].lon);
 
           setCoords({ lat: newLat, lng: newLng });
-          handleInputChange();
+          clearExistingAuditVisuals();
+          setAuditResult(null);
           if (map.current) map.current.flyTo({ center: [newLng, newLat], zoom: 15 });
           if (marker.current) marker.current.setLngLat([newLng, newLat]);
         }
@@ -210,29 +226,43 @@ export default function GroundTruthDashboard() {
     }
   };
 
+  /**
+   * Renders color-coded amenity markers on map with non-intrusive hover/click tooltips
+   */
   const renderAmenityPins = (points: any[]) => {
+    amenityMarkersRef.current.forEach((m) => m.remove());
+    amenityMarkersRef.current = [];
+
     const maplibregl = maplibreglRef.current;
     if (!map.current || !maplibregl || !points) return;
 
     const typeConfig: Record<string, { color: string; icon: string; label: string }> = {
       hospital: { color: '#ef4444', icon: '🏥', label: 'Hospital/Clinic' },
       school: { color: '#3b82f6', icon: '🏫', label: 'School' },
-      grocery: { color: '#10b981', icon: '🛒', label: 'Grocery/Market' },
+      grocery: { color: '#10b981', icon: '🛒', label: 'Market/Grocery' },
       pharmacy: { color: '#a855f7', icon: '💊', label: 'Pharmacy' },
     };
 
     points.forEach((pt: any) => {
       const cfg = typeConfig[pt.type] || { color: '#64748b', icon: '📍', label: 'Amenity' };
 
+      // Calculate distance and walking time from the target location
+      const distanceMeters = calculateDistanceMeters(coords.lat, coords.lng, pt.lat, pt.lng);
+      const walkingMinutes = Math.max(1, Math.round(distanceMeters / 80)); // ~4.8 km/h walking pace
+      const formattedDistance =
+        distanceMeters >= 1000
+          ? `${(distanceMeters / 1000).toFixed(2)} km`
+          : `${distanceMeters} meters`;
+
       const el = document.createElement('div');
       el.className = 'amenity-marker';
       el.dataset.type = pt.type;
-      el.style.width = '28px';
-      el.style.height = '28px';
+      el.style.width = '30px';
+      el.style.height = '30px';
       el.style.backgroundColor = cfg.color;
       el.style.borderRadius = '50%';
       el.style.border = '2px solid #ffffff';
-      el.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+      el.style.boxShadow = '0 2px 8px rgba(0,0,0,0.4)';
       el.style.display = visibleFilters[pt.type as keyof typeof visibleFilters] ? 'flex' : 'none';
       el.style.alignItems = 'center';
       el.style.justifyContent = 'center';
@@ -240,17 +270,43 @@ export default function GroundTruthDashboard() {
       el.style.fontSize = '14px';
       el.innerHTML = cfg.icon;
 
-      const popup = new maplibregl.Popup({ offset: 15 }).setHTML(`
-        <div style="font-family: system-ui; padding: 4px; color: #0f172a;">
-          <div style="font-size: 10px; color: ${cfg.color}; font-weight: 800; text-transform: uppercase;">${cfg.label}</div>
-          <div style="font-size: 13px; font-weight: 700; margin-top: 2px;">${pt.name}</div>
-          <div style="font-size: 10px; color: #64748b; margin-top: 2px;">Coord: ${pt.lat.toFixed(4)}, ${pt.lng.toFixed(4)}</div>
+      // Tooltip HTML showing name, walking distance, and estimated time
+      const tooltipHtml = `
+        <div style="font-family: system-ui, sans-serif; padding: 4px; color: #0f172a; min-width: 180px;">
+          <div style="font-size: 10px; color: ${cfg.color}; font-weight: 800; text-transform: uppercase;">
+            ${cfg.label}
+          </div>
+          <div style="font-size: 13px; font-weight: 700; margin-top: 2px; color: #0f172a;">
+            ${pt.name}
+          </div>
+          <div style="font-size: 11px; color: #475569; margin-top: 4px; border-top: 1px solid #e2e8f0; pt: 4px; display: flex; justify-content: space-between;">
+            <span>🚶 <strong>${formattedDistance}</strong></span>
+            <span>⏱️ <strong>~${walkingMinutes} min</strong></span>
+          </div>
         </div>
-      `);
+      `;
+
+      // Prevent the map click listener from firing and moving the center pin
+      el.addEventListener('click', (event) => {
+        event.stopPropagation();
+        event.preventDefault();
+
+        if (amenityPopupRef.current) {
+          amenityPopupRef.current.remove();
+        }
+
+        amenityPopupRef.current = new maplibregl.Popup({
+          offset: 15,
+          closeButton: true,
+          closeOnClick: false,
+        })
+          .setLngLat([pt.lng, pt.lat])
+          .setHTML(tooltipHtml)
+          .addTo(map.current);
+      });
 
       const mapMarker = new maplibregl.Marker({ element: el })
         .setLngLat([pt.lng, pt.lat])
-        .setPopup(popup)
         .addTo(map.current);
 
       amenityMarkersRef.current.push(mapMarker);
@@ -270,7 +326,7 @@ export default function GroundTruthDashboard() {
   };
 
   /**
-   * Always runs a fresh audit query
+   * Executes audit, paints boundary, and displays only the POI pins on the map
    */
   const runAudit = async () => {
     setLoading(true);
@@ -290,7 +346,6 @@ export default function GroundTruthDashboard() {
 
       const data = await res.json();
       setAuditResult(data);
-      setIsInputStale(false);
 
       if (map.current && data.isochrone) {
         map.current.addSource('isochrone-source', {
@@ -308,7 +363,7 @@ export default function GroundTruthDashboard() {
           source: 'isochrone-source',
           paint: {
             'fill-color': '#10b981',
-            'fill-opacity': 0.25,
+            'fill-opacity': 0.22,
           },
         });
 
@@ -324,51 +379,9 @@ export default function GroundTruthDashboard() {
 
         map.current.flyTo({ center: [coords.lng, coords.lat], zoom: 14 });
 
+        // Place all amenity markers on map
         if (data.amenityPoints) {
           renderAmenityPins(data.amenityPoints);
-        }
-
-        const maplibregl = maplibreglRef.current;
-        if (maplibregl) {
-          const popupHtml = `
-            <div style="font-family: system-ui, sans-serif; min-width: 250px; padding: 4px; color: #0f172a;">
-              <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; margin-bottom: 8px;">
-                <span style="font-weight: 800; font-size: 13px; color: #047857; text-transform: uppercase;">GROUNDTRUTH AUDIT</span>
-                <span style="font-size: 11px; background: #d1fae5; color: #065f46; padding: 2px 6px; border-radius: 9999px; font-weight: 700;">${distanceKm} KM</span>
-              </div>
-              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px;">
-                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 5px; text-align: center;">
-                  <div style="font-size: 9px; color: #64748b; font-weight: 600; text-transform: uppercase;">Civic Infra</div>
-                  <div style="font-size: 15px; font-weight: 900;">${data.scores?.civicInfrastructureScore ?? 'N/A'}</div>
-                </div>
-                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 5px; text-align: center;">
-                  <div style="font-size: 9px; color: #64748b; font-weight: 600; text-transform: uppercase;">Neighbourhood</div>
-                  <div style="font-size: 15px; font-weight: 900;">${data.scores?.neighbourhoodScore ?? 'N/A'}</div>
-                </div>
-                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 5px; text-align: center;">
-                  <div style="font-size: 9px; color: #64748b; font-weight: 600; text-transform: uppercase;">Environment</div>
-                  <div style="font-size: 15px; font-weight: 900;">${data.scores?.environmentalScore ?? 'N/A'}</div>
-                </div>
-                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 5px; text-align: center;">
-                  <div style="font-size: 9px; color: #64748b; font-weight: 600; text-transform: uppercase;">Walk Reality</div>
-                  <div style="font-size: 15px; font-weight: 900;">${data.scores?.commuteRealityScore ?? 'N/A'}</div>
-                </div>
-              </div>
-              <div style="font-size: 11px; background: #f1f5f9; padding: 6px; border-radius: 6px; color: #334155;">
-                🏥 ${data.breakdowns?.civic?.hospitalsNearby ?? 0} &bull; 🏫 ${data.breakdowns?.civic?.schoolsNearby ?? 0} &bull; 🛒 ${data.breakdowns?.civic?.groceryHubs ?? 0} &bull; 💊 ${data.breakdowns?.civic?.chemistShops ?? 0}
-              </div>
-            </div>
-          `;
-
-          activePopup.current = new maplibregl.Popup({
-            closeButton: true,
-            closeOnClick: false,
-            maxWidth: '320px',
-            offset: 25,
-          })
-            .setLngLat([coords.lng, coords.lat])
-            .setHTML(popupHtml)
-            .addTo(map.current);
         }
       }
     } catch (err) {
@@ -449,7 +462,8 @@ export default function GroundTruthDashboard() {
                 value={address}
                 onChange={(e) => {
                   setAddress(e.target.value);
-                  handleInputChange();
+                  clearExistingAuditVisuals();
+                  setAuditResult(null);
                 }}
                 onKeyDown={handleAddressSearch}
                 placeholder="Type location & press Enter"
@@ -485,7 +499,8 @@ export default function GroundTruthDashboard() {
                 value={distanceKm}
                 onChange={(e) => {
                   setDistanceKm(parseFloat(e.target.value));
-                  handleInputChange();
+                  clearExistingAuditVisuals();
+                  setAuditResult(null);
                 }}
                 className="w-full accent-emerald-500 bg-slate-800 rounded-lg cursor-pointer"
               />
@@ -499,17 +514,9 @@ export default function GroundTruthDashboard() {
             <button
               onClick={runAudit}
               disabled={loading}
-              className={`w-full font-bold py-3 rounded-lg transition duration-200 disabled:opacity-50 cursor-pointer text-sm uppercase tracking-wider ${
-                isInputStale
-                  ? 'bg-emerald-400 hover:bg-emerald-500 text-slate-950 ring-2 ring-emerald-300 ring-offset-2 ring-offset-slate-900 animate-pulse'
-                  : 'bg-emerald-500 hover:bg-emerald-600 text-slate-950'
-              }`}
+              className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold py-3 rounded-lg transition duration-200 disabled:opacity-50 cursor-pointer text-sm uppercase tracking-wider"
             >
-              {loading
-                ? 'Auditing Spatial Reality...'
-                : isInputStale
-                ? 'Generate Updated Report'
-                : 'Generate GroundTruth Report'}
+              {loading ? 'Auditing Spatial Reality...' : 'Generate GroundTruth Report'}
             </button>
           </div>
 
@@ -682,7 +689,7 @@ export default function GroundTruthDashboard() {
         {/* POI Filter Toolbar (Active after audit) */}
         {auditResult && (
           <div className="absolute top-4 left-4 bg-slate-900/90 backdrop-blur border border-slate-800 p-2 rounded-xl text-xs text-slate-200 shadow-2xl flex items-center space-x-2 z-10">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider pl-1">Map POIs:</span>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider pl-1">Amenities:</span>
             <button
               type="button"
               onClick={() => toggleFilter('hospital')}
@@ -717,7 +724,7 @@ export default function GroundTruthDashboard() {
               }`}
             >
               <span>🛒</span>
-              <span>Marts</span>
+              <span>Markets</span>
             </button>
             <button
               type="button"
@@ -734,16 +741,16 @@ export default function GroundTruthDashboard() {
           </div>
         )}
 
-        {/* Dynamic Legend */}
+        {/* Legend */}
         {auditResult && (
           <div className="absolute top-4 right-4 bg-slate-900/90 backdrop-blur border border-slate-800 px-3 py-2 rounded-xl text-[11px] text-slate-300 shadow-xl flex items-center space-x-3 pointer-events-none z-10">
             <div className="flex items-center space-x-1.5">
               <span className="w-3 h-3 rounded-full bg-emerald-500/30 border border-emerald-400 inline-block" />
-              <span>{distanceKm} km Isochrone</span>
+              <span>{distanceKm} km Reach Boundary</span>
             </div>
             <div className="flex items-center space-x-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block" />
-              <span>Center</span>
+              <span>Target Pin</span>
             </div>
           </div>
         )}
