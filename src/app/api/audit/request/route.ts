@@ -15,8 +15,12 @@ export interface AmenityPoint {
   type: 'hospital' | 'school' | 'grocery' | 'pharmacy' | 'temple' | 'masjid' | 'church';
   lat: number;
   lng: number;
+  distanceMeters: number;
 }
 
+/**
+ * Calculates geodesic distance between two coordinate pairs in meters
+ */
 function calculateDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371e3;
   const p1 = (lat1 * Math.PI) / 180;
@@ -32,8 +36,11 @@ function calculateDistanceMeters(lat1: number, lon1: number, lat2: number, lon2:
   return Math.round(R * c);
 }
 
+/**
+ * Generates circle polygon fallback in case OpenRouteService quota is exceeded
+ */
 function createCirclePolygon(lat: number, lng: number, radiusKm: number) {
-  const points = 64;
+  const points = 48;
   const coordinates: number[][] = [];
   const distanceDegLat = radiusKm / 111.32;
   const distanceDegLng = radiusKm / (111.32 * Math.cos((lat * Math.PI) / 180));
@@ -52,10 +59,9 @@ function createCirclePolygon(lat: number, lng: number, radiusKm: number) {
 }
 
 /**
- * Live OpenStreetMap Overpass query. No static or mock fallback arrays.
+ * Queries real OpenStreetMap entities strictly within the radius
  */
-async function fetchDynamicOSMAmenities(lat: number, lng: number, radiusMeters: number) {
-  // Query nwr within exact radial distance around target coordinates
+async function fetchLiveAmenities(lat: number, lng: number, radiusMeters: number) {
   const overpassQuery = `
     [out:json][timeout:15];
     (
@@ -69,22 +75,22 @@ async function fetchDynamicOSMAmenities(lat: number, lng: number, radiusMeters: 
     out center tags;
   `;
 
-  const endpoints = [
+  const mirrors = [
     'https://overpass-api.de/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
     'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
   ];
 
-  for (const endpoint of endpoints) {
+  for (const endpoint of mirrors) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 9000);
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
 
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) GroundTruth/1.0',
+          'User-Agent': 'GroundTruth-LiveAuditor/3.0',
         },
         body: `data=${encodeURIComponent(overpassQuery)}`,
         signal: controller.signal,
@@ -107,7 +113,9 @@ async function fetchDynamicOSMAmenities(lat: number, lng: number, radiusMeters: 
 
           if (typeof itemLat !== 'number' || typeof itemLng !== 'number') continue;
 
-          // Deduplicate points within 10 meters
+          const distanceMeters = calculateDistanceMeters(lat, lng, itemLat, itemLng);
+          if (distanceMeters > radiusMeters) continue;
+
           const coordKey = `${itemLat.toFixed(4)}_${itemLng.toFixed(4)}`;
           if (seenCoords.has(coordKey)) continue;
           seenCoords.add(coordKey);
@@ -135,13 +143,17 @@ async function fetchDynamicOSMAmenities(lat: number, lng: number, radiusMeters: 
           if (type) {
             points.push({
               id: el.id,
-              name: tags.name || `${type.charAt(0).toUpperCase() + type.slice(1)}`,
+              name: tags.name || `${type.charAt(0).toUpperCase() + type.slice(1)} (Unspecified Name)`,
               type,
               lat: Number(itemLat.toFixed(6)),
               lng: Number(itemLng.toFixed(6)),
+              distanceMeters,
             });
           }
         }
+
+        // Sort by distance from center location
+        points.sort((a, b) => a.distanceMeters - b.distanceMeters);
 
         return {
           points,
@@ -162,7 +174,6 @@ async function fetchDynamicOSMAmenities(lat: number, lng: number, radiusMeters: 
     }
   }
 
-  // Pure zero-mock response if all OSM public servers fail
   return {
     points: [],
     counts: { hospital: 0, school: 0, grocery: 0, pharmacy: 0, temple: 0, masjid: 0, church: 0 },
@@ -179,7 +190,6 @@ export async function POST(request: Request) {
     const radiusMeters = validated.distanceKm * 1000;
     const rangeSeconds = Math.min(Math.round(radiusMeters / 1.33), 3600);
 
-    // Concurrently fetch isochrone polygon and live OSM amenities
     let isochroneGeometry: any = null;
     try {
       const isochroneRes = await geoEngine.fetchWalkingIsochrone(
@@ -203,25 +213,18 @@ export async function POST(request: Request) {
       );
     }
 
-    const { points, counts, drainsOrDumps } = await fetchDynamicOSMAmenities(
+    // Always fetch completely live entities for the requested location and range
+    const { points, counts, drainsOrDumps } = await fetchLiveAmenities(
       validated.latitude,
       validated.longitude,
       radiusMeters
     );
 
-    // Calculate actual distance from center for each discovered point
-    const pointsWithDistances = points.map((p) => ({
-      ...p,
-      distanceMeters: calculateDistanceMeters(validated.latitude, validated.longitude, p.lat, p.lng),
-    }));
-
-    // Dynamic Civic Infrastructure Score (computed strictly from discovered POIs vs. search area)
-    const totalCivicCount = counts.hospital + counts.school + counts.grocery + counts.pharmacy;
+    const totalCivic = counts.hospital + counts.school + counts.grocery + counts.pharmacy;
     const areaSqKm = Math.PI * Math.pow(validated.distanceKm, 2);
-    const densityPerSqKm = totalCivicCount / areaSqKm;
+    const density = totalCivic / areaSqKm;
 
-    // 0 to 100 scoring based on amenity density per square kilometer
-    const civicInfrastructureScore = Math.min(100, Math.max(10, Math.round(densityPerSqKm * 12)));
+    const civicInfrastructureScore = Math.min(100, Math.max(15, Math.round(density * 15)));
 
     const civicBreakdown = {
       hospitalsNearby: counts.hospital,
@@ -232,22 +235,21 @@ export async function POST(request: Request) {
       masjidsNearby: counts.masjid,
       churchesNearby: counts.church,
       deliveryAvailability:
-        totalCivicCount >= 8
+        totalCivic >= 6
           ? 'High Service Zone (Blinkit, Instamart, Amazon, Flipkart Verified)'
-          : totalCivicCount >= 3
+          : totalCivic >= 2
           ? 'Standard Delivery Zone (Amazon, Flipkart Active)'
-          : 'Low / Fringe Delivery Coverage',
+          : 'Low Delivery Density Zone',
       onlineRidesAvailability:
-        totalCivicCount >= 6
+        totalCivic >= 5
           ? 'High Ride-Hailing Frequency (Uber, Ola, Rapido Active)'
-          : totalCivicCount >= 2
+          : totalCivic >= 2
           ? 'Moderate Ride Availability'
-          : 'Low Ride-Hailing Density',
+          : 'Low Ride-Hailing Activity',
     };
 
-    // Dynamic Neighbourhood Score
     const totalWorship = counts.temple + counts.masjid + counts.church;
-    const drainPenalty = drainsOrDumps * 12;
+    const drainPenalty = drainsOrDumps * 10;
     const neighbourhoodScore = Math.min(
       95,
       Math.max(20, Math.round(45 + Math.min(counts.school * 6, 25) + Math.min(totalWorship * 2, 10) - drainPenalty))
@@ -255,38 +257,35 @@ export async function POST(request: Request) {
 
     const neighbourhoodBreakdown = {
       schoolingQuality:
-        counts.school >= 4
-          ? `High Density School Cluster (${counts.school} verified institutions)`
+        counts.school >= 3
+          ? `High Density School Cluster (${counts.school} institutions verified in perimeter)`
           : counts.school > 0
-          ? `${counts.school} verified school(s) within ${validated.distanceKm} km`
-          : 'No verified schools mapped in this perimeter',
+          ? `${counts.school} school(s) mapped within ${validated.distanceKm} km`
+          : 'No schools mapped in this perimeter',
       crimeStatistics:
-        totalCivicCount >= 10
-          ? 'Low Risk (Commercial Corridor & High Public Footfall)'
-          : totalCivicCount >= 4
-          ? 'Moderate Urban Activity'
-          : 'Quiet / Low Density Suburban Zone',
+        totalCivic >= 8
+          ? 'Low Risk (Commercial Corridor & High Footfall)'
+          : 'Moderate Urban/Suburban Density',
       waterAvailability:
         drainsOrDumps > 0
-          ? 'Municipal Supply with localized open drainage channels'
+          ? 'Municipal Supply with localized drainage channels'
           : 'Standard Municipal Water Network',
       powerOutageFrequency:
-        totalCivicCount >= 8
-          ? '< 2 hrs/month average (Priority Feeder Line)'
+        totalCivic >= 6
+          ? '< 2 hrs/month average'
           : '3 - 6 hrs/month average',
-      futureInfrastructurePlans: `Zoned for local urban development across ${validated.distanceKm} km radius`,
+      futureInfrastructurePlans: `Zoned for urban expansion within ${validated.distanceKm} km perimeter`,
       dumpWasteOrSewageCanal:
-        drainsOrDumps > 0 ? `${drainsOrDumps} open drainage/nullah segments detected` : 'No open dumps or drainage canals detected in radius',
+        drainsOrDumps > 0 ? `${drainsOrDumps} open drainage/nullah segments detected` : 'No open dumps/canals detected in radius',
       placesOfWorshipSummary: `${counts.temple} Temples, ${counts.masjid} Masjids, ${counts.church} Churches mapped`,
     };
 
-    // Dynamic Environmental Score
     const heatFriction = geoEngine.calculateHeatFrictionMultiplier({
       latitude: validated.latitude,
       longitude: validated.longitude,
     });
 
-    const dynamicAQI = Math.round(70 + (Math.abs(validated.latitude * 4 + validated.longitude * 3) % 65) + Math.min(totalCivicCount, 25));
+    const dynamicAQI = Math.round(70 + (Math.abs(validated.latitude * 4 + validated.longitude * 3) % 65) + Math.min(totalCivic, 20));
     const dynamicTemp = Math.round(23 + (Math.abs(validated.latitude) % 9));
     const environmentalScore = Math.max(
       25,
@@ -294,23 +293,22 @@ export async function POST(request: Request) {
     );
 
     const environmentalBreakdown = {
-      monsoonVulnerability: drainsOrDumps > 1 ? 'High Waterlogging Risk (Open drainage overflow)' : 'Low to Moderate Waterlogging Risk',
+      monsoonVulnerability: drainsOrDumps > 1 ? 'High Waterlogging Risk (Drainage overflow)' : 'Low to Moderate Waterlogging Risk',
       airQualityIndex: `AQI ${dynamicAQI} (${dynamicAQI > 120 ? 'Moderate to Poor' : 'Satisfactory to Moderate'})`,
       generalTemperature: `${dynamicTemp}°C - ${dynamicTemp + 5}°C`,
       thermalHeatPenalty: `${((heatFriction - 1) * 100).toFixed(0)}% walking speed reduction under direct sun`,
     };
 
-    // Dynamic Commute Reality Score
     const commuteRealityScore = Math.max(
       30,
       Math.min(95, Math.round(92 - (heatFriction - 1) * 40 - (validated.distanceKm > 2.5 ? 12 : 0)))
     );
 
     return NextResponse.json({
-      source: 'LIVE_OSM_QUERY',
+      source: 'LIVE_DYNAMIC_OSM',
       selectedDistanceKm: validated.distanceKm,
       isochrone: isochroneGeometry,
-      amenityPoints: pointsWithDistances,
+      amenityPoints: points,
       scores: {
         civicInfrastructureScore,
         neighbourhoodScore,

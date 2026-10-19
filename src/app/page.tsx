@@ -25,9 +25,8 @@ export default function GroundTruthDashboard() {
   distanceRef.current = distanceKm;
 
   const [loading, setLoading] = useState<boolean>(false);
-  const [showLocationModal, setShowLocationModal] = useState<boolean>(true);
   const [auditResult, setAuditResult] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState<'civic' | 'neighbourhood' | 'environment'>('civic');
+  const [activeTab, setActiveTab] = useState<'civic' | 'amenity_list' | 'neighbourhood' | 'environment'>('civic');
 
   const [visibleFilters, setVisibleFilters] = useState<{
     hospital: boolean;
@@ -103,8 +102,10 @@ export default function GroundTruthDashboard() {
     }
   };
 
-  const handleAllowLocation = () => {
-    setShowLocationModal(false);
+  /**
+   * Step 1 & 2: Automatic Geolocation prompt on launch with clean fallback
+   */
+  const requestBrowserLocation = () => {
     if ('geolocation' in navigator) {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
@@ -118,18 +119,16 @@ export default function GroundTruthDashboard() {
           reverseGeocode(lat, lng);
         },
         () => {
-          reverseGeocode(coordsRef.current.lat, coordsRef.current.lng);
+          // If rejected or dismissed, use default location
           updateTargetMarker(coordsRef.current.lng, coordsRef.current.lat);
+          reverseGeocode(coordsRef.current.lat, coordsRef.current.lng);
         },
         { enableHighAccuracy: true, timeout: 8000 }
       );
+    } else {
+      updateTargetMarker(coordsRef.current.lng, coordsRef.current.lat);
+      reverseGeocode(coordsRef.current.lat, coordsRef.current.lng);
     }
-  };
-
-  const handleDeclineLocation = () => {
-    setShowLocationModal(false);
-    updateTargetMarker(coordsRef.current.lng, coordsRef.current.lat);
-    reverseGeocode(coordsRef.current.lat, coordsRef.current.lng);
   };
 
   useEffect(() => {
@@ -184,9 +183,13 @@ export default function GroundTruthDashboard() {
 
       map.current.on('load', () => {
         updateTargetMarker(coordsRef.current.lng, coordsRef.current.lat);
+        // Step 1: Prompt location check on initial map mount
+        requestBrowserLocation();
       });
 
+      // Step 3: Location can be changed by clicking on the map
       map.current.on('click', (e: any) => {
+        // Prevent moving target location if the user clicked an amenity marker
         if (e.originalEvent?.defaultPrevented) return;
 
         const { lng, lat } = e.lngLat;
@@ -232,6 +235,9 @@ export default function GroundTruthDashboard() {
     }
   };
 
+  /**
+   * Step 5: Mark amenities with hover tooltips and prevent location repositioning
+   */
   const renderAmenityPins = (points: any[]) => {
     clearAmenityPins();
     const maplibregl = maplibreglRef.current;
@@ -278,12 +284,15 @@ export default function GroundTruthDashboard() {
       el.innerHTML = cfg.icon;
 
       const tooltipHtml = `
-        <div style="font-family: system-ui, sans-serif; padding: 4px; color: #0f172a; min-width: 180px;">
+        <div style="font-family: system-ui, sans-serif; padding: 4px; color: #0f172a; min-width: 190px;">
           <div style="font-size: 10px; color: ${cfg.color}; font-weight: 800; text-transform: uppercase;">
             ${cfg.label}
           </div>
           <div style="font-size: 13px; font-weight: 700; margin-top: 2px; color: #0f172a;">
             ${pt.name}
+          </div>
+          <div style="font-size: 10px; color: #64748b; margin-top: 2px;">
+            Coord: ${lat.toFixed(5)}, ${lng.toFixed(5)}
           </div>
           <div style="font-size: 11px; color: #475569; margin-top: 4px; border-top: 1px solid #e2e8f0; padding-top: 4px; display: flex; justify-content: space-between;">
             <span>🚶 <strong>${formattedDistance}</strong></span>
@@ -292,6 +301,7 @@ export default function GroundTruthDashboard() {
         </div>
       `;
 
+      // Hover displays marker details
       el.addEventListener('mouseenter', () => {
         if (amenityPopupRef.current) amenityPopupRef.current.remove();
         amenityPopupRef.current = new maplibregl.Popup({
@@ -311,6 +321,7 @@ export default function GroundTruthDashboard() {
         }
       });
 
+      // Click displays marker details AND stops event propagation so target location is NOT changed
       el.addEventListener('click', (event) => {
         event.stopPropagation();
         event.preventDefault();
@@ -346,6 +357,9 @@ export default function GroundTruthDashboard() {
     });
   };
 
+  /**
+   * Step 4 & 6: Generate fresh dynamic report on click for the active inputs
+   */
   const runAudit = async () => {
     setLoading(true);
     clearAmenityPins();
@@ -428,39 +442,8 @@ export default function GroundTruthDashboard() {
 
   return (
     <main className="flex flex-col lg:flex-row h-screen w-screen overflow-hidden font-sans bg-slate-950 text-slate-100">
-      {/* Geolocation Modal */}
-      {showLocationModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl">
-            <div className="flex items-center space-x-3 mb-4">
-              <span className="text-2xl">📍</span>
-              <h3 className="text-lg font-bold text-white">Enable Accurate Location?</h3>
-            </div>
-            <p className="text-sm text-slate-300 mb-6 leading-relaxed">
-              GroundTruth uses your precise coordinates to audit local amenities, monsoon waterlogging risks, and walking boundaries. Would you like to use your current GPS location or continue with the default position?
-            </p>
-            <div className="flex space-x-3 justify-end">
-              <button
-                type="button"
-                onClick={handleDeclineLocation}
-                className="px-4 py-2 text-xs font-semibold rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
-              >
-                Use Default Location
-              </button>
-              <button
-                type="button"
-                onClick={handleAllowLocation}
-                className="px-5 py-2 text-xs font-semibold rounded-lg bg-emerald-500 hover:bg-emerald-600 text-slate-950 transition font-bold"
-              >
-                Allow GPS Location
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Control & Results Sidebar */}
-      <div className="w-full lg:w-[460px] h-full bg-slate-900 border-r border-slate-800 flex flex-col justify-between shadow-2xl z-20 overflow-y-auto">
+      <div className="w-full lg:w-[480px] h-full bg-slate-900 border-r border-slate-800 flex flex-col justify-between shadow-2xl z-20 overflow-y-auto">
         <div className="p-6">
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center space-x-2">
@@ -479,7 +462,7 @@ export default function GroundTruthDashboard() {
                 </label>
                 <button
                   type="button"
-                  onClick={handleAllowLocation}
+                  onClick={requestBrowserLocation}
                   className="text-xs text-emerald-400 hover:underline flex items-center space-x-1"
                 >
                   <span>📍 GPS Locate</span>
@@ -546,7 +529,7 @@ export default function GroundTruthDashboard() {
               disabled={loading}
               className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold py-3 rounded-lg transition duration-200 disabled:opacity-50 cursor-pointer text-sm uppercase tracking-wider"
             >
-              {loading ? 'Auditing Spatial Reality...' : 'Generate GroundTruth Report'}
+              {loading ? 'Auditing Real-World Spatial Data...' : 'Generate GroundTruth Report'}
             </button>
           </div>
 
@@ -558,7 +541,7 @@ export default function GroundTruthDashboard() {
                   Verified Summary
                 </h3>
                 <span className="text-[11px] text-emerald-400 bg-emerald-950 border border-emerald-800 px-2 py-0.5 rounded-full font-mono">
-                  ALL {auditResult.amenityPoints?.length ?? 0} POIs ON MAP
+                  {auditResult.amenityPoints?.length ?? 0} AMENITIES MAPPED
                 </span>
               </div>
 
@@ -598,25 +581,32 @@ export default function GroundTruthDashboard() {
               </div>
 
               {/* Breakdown Tab Switcher */}
-              <div className="flex border-b border-slate-800 pt-2 text-xs font-semibold">
+              <div className="flex border-b border-slate-800 pt-2 text-xs font-semibold overflow-x-auto space-x-4">
                 <button
                   type="button"
                   onClick={() => setActiveTab('civic')}
-                  className={`pb-2 mr-4 ${activeTab === 'civic' ? 'text-emerald-400 border-b-2 border-emerald-400' : 'text-slate-400 hover:text-slate-200'}`}
+                  className={`pb-2 whitespace-nowrap ${activeTab === 'civic' ? 'text-emerald-400 border-b-2 border-emerald-400' : 'text-slate-400 hover:text-slate-200'}`}
                 >
                   Civic Amenities
                 </button>
                 <button
                   type="button"
+                  onClick={() => setActiveTab('amenity_list')}
+                  className={`pb-2 whitespace-nowrap ${activeTab === 'amenity_list' ? 'text-emerald-400 border-b-2 border-emerald-400' : 'text-slate-400 hover:text-slate-200'}`}
+                >
+                  Mapped Details ({auditResult.amenityPoints?.length ?? 0})
+                </button>
+                <button
+                  type="button"
                   onClick={() => setActiveTab('neighbourhood')}
-                  className={`pb-2 mr-4 ${activeTab === 'neighbourhood' ? 'text-emerald-400 border-b-2 border-emerald-400' : 'text-slate-400 hover:text-slate-200'}`}
+                  className={`pb-2 whitespace-nowrap ${activeTab === 'neighbourhood' ? 'text-emerald-400 border-b-2 border-emerald-400' : 'text-slate-400 hover:text-slate-200'}`}
                 >
                   Neighbourhood
                 </button>
                 <button
                   type="button"
                   onClick={() => setActiveTab('environment')}
-                  className={`pb-2 ${activeTab === 'environment' ? 'text-emerald-400 border-b-2 border-emerald-400' : 'text-slate-400 hover:text-slate-200'}`}
+                  className={`pb-2 whitespace-nowrap ${activeTab === 'environment' ? 'text-emerald-400 border-b-2 border-emerald-400' : 'text-slate-400 hover:text-slate-200'}`}
                 >
                   Environment
                 </button>
@@ -665,6 +655,30 @@ export default function GroundTruthDashboard() {
                   </>
                 )}
 
+                {/* Step 4: Full list of discovered amenities with distance and exact coordinates */}
+                {activeTab === 'amenity_list' && (
+                  <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
+                    {auditResult.amenityPoints?.length === 0 ? (
+                      <p className="text-slate-500 py-2">No amenities mapped in this exact perimeter.</p>
+                    ) : (
+                      auditResult.amenityPoints.map((item: any) => (
+                        <div key={item.id} className="p-2 bg-slate-800/60 border border-slate-700/60 rounded-lg">
+                          <div className="flex justify-between items-start">
+                            <span className="font-semibold text-slate-200 text-xs">{item.name}</span>
+                            <span className="text-emerald-400 font-mono text-[11px] whitespace-nowrap ml-2">
+                              {item.distanceMeters >= 1000 ? `${(item.distanceMeters / 1000).toFixed(2)} km` : `${item.distanceMeters} m`}
+                            </span>
+                          </div>
+                          <div className="flex justify-between text-[10px] text-slate-400 mt-1 uppercase">
+                            <span>{item.type}</span>
+                            <span>{item.lat.toFixed(4)}, {item.lng.toFixed(4)}</span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+
                 {activeTab === 'neighbourhood' && (
                   <>
                     <div className="flex justify-between py-1 border-b border-slate-800/60">
@@ -683,7 +697,7 @@ export default function GroundTruthDashboard() {
                       <span className="text-slate-400">Power Outages:</span>
                       <span className="font-semibold text-slate-200">{auditResult.breakdowns?.neighbourhood?.powerOutageFrequency ?? 'No data'}</span>
                     </div>
-                    <div className="flex justify-between py-1 border-b border-slate-800/60">
+                    <div className="py-1 border-b border-slate-800/60">
                       <span className="text-slate-400 block mb-0.5">Waste Dumps / Drainage:</span>
                       <span className="text-slate-300 text-[11px]">{auditResult.breakdowns?.neighbourhood?.dumpWasteOrSewageCanal ?? 'No data'}</span>
                     </div>
