@@ -1,12 +1,11 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 export default function GroundTruthDashboard() {
   const mapContainer = useRef<HTMLDivElement>(null);
-  const map = useRef<maplibregl.Map | null>(null);
+  const map = useRef<any>(null);
 
   const [address, setAddress] = useState('MG Road, Bengaluru');
   const [listingText, setListingText] = useState('Spacious 3BHK just 5 mins walk to Metro station.');
@@ -14,46 +13,50 @@ export default function GroundTruthDashboard() {
   const [auditResult, setAuditResult] = useState<any>(null);
 
   useEffect(() => {
-    if (map.current || !mapContainer.current) return;
+    let isMounted = true;
 
-    if (maplibregl.config) {
-      maplibregl.config.WORKER_URL = '/maplibre-gl-csp-worker.js';
-    }
+    // Dynamically load MapLibre on the client
+    import('maplibre-gl').then((maplibreglModule) => {
+      if (!isMounted || !mapContainer.current || map.current) return;
 
-    // Direct standard OpenStreetMap raster style (Zero vector worker bugs)
-    const rasterStyle: maplibregl.StyleSpecification = {
-      version: 8,
-      sources: {
-        'osm-tiles': {
-          type: 'raster',
-          tiles: [
-            'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
-            'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
-            'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png'
-          ],
-          tileSize: 256,
-          attribution: '&copy; OpenStreetMap Contributors',
+      const maplibregl = maplibreglModule;
+
+      // Define standard raster style (eliminates vector tile worker discrepancies)
+      const rasterStyle: any = {
+        version: 8,
+        sources: {
+          'osm-tiles': {
+            type: 'raster',
+            tiles: [
+              'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
+              'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
+              'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png',
+            ],
+            tileSize: 256,
+            attribution: '&copy; OpenStreetMap Contributors',
+          },
         },
-      },
-      layers: [
-        {
-          id: 'osm-tiles-layer',
-          type: 'raster',
-          source: 'osm-tiles',
-          minzoom: 0,
-          maxzoom: 19,
-        },
-      ],
-    };
+        layers: [
+          {
+            id: 'osm-tiles-layer',
+            type: 'raster',
+            source: 'osm-tiles',
+            minzoom: 0,
+            maxzoom: 19,
+          },
+        ],
+      };
 
-    map.current = new maplibregl.Map({
-      container: mapContainer.current,
-      style: rasterStyle,
-      center: [77.5946, 12.9716],
-      zoom: 13,
+      map.current = new maplibregl.Map({
+        container: mapContainer.current,
+        style: rasterStyle,
+        center: [77.5946, 12.9716], // Default Bengaluru
+        zoom: 13,
+      });
     });
 
     return () => {
+      isMounted = false;
       if (map.current) {
         map.current.remove();
         map.current = null;
@@ -79,7 +82,7 @@ export default function GroundTruthDashboard() {
       setAuditResult(data);
 
       if (map.current && data.isochrone) {
-        // Remove existing layer and source if present
+        // Remove existing layers if present
         if (map.current.getLayer('isochrone-line')) {
           map.current.removeLayer('isochrone-line');
         }
@@ -90,7 +93,7 @@ export default function GroundTruthDashboard() {
           map.current.removeSource('isochrone-source');
         }
 
-        // Add Isochrone Polygon to WebGL Map
+        // Add Isochrone Polygon to Map
         map.current.addSource('isochrone-source', {
           type: 'geojson',
           data: {
