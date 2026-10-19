@@ -8,6 +8,7 @@ export default function GroundTruthDashboard() {
   const map = useRef<any>(null);
   const marker = useRef<any>(null);
 
+  // Default coordinates: Bengaluru
   const [coords, setCoords] = useState<{ lat: number; lng: number }>({
     lat: 12.9716,
     lng: 77.5946,
@@ -15,23 +16,21 @@ export default function GroundTruthDashboard() {
 
   const [address, setAddress] = useState<string>('MG Road, Bengaluru');
   const [listingText, setListingText] = useState<string>(
-    'Spacious 3BHK just 5 mins walk to Metro station.'
+    'Spacious 3BHK flat, just 5 mins walk to metro and commercial tech hubs.'
   );
+  const [distanceKm, setDistanceKm] = useState<number>(2);
   const [loading, setLoading] = useState<boolean>(false);
-  const [locating, setLocating] = useState<boolean>(false);
-  const [isPermissionBlocked, setIsPermissionBlocked] = useState<boolean>(false);
+  const [showLocationModal, setShowLocationModal] = useState<boolean>(true);
   const [auditResult, setAuditResult] = useState<any>(null);
+  const [activeTab, setActiveTab] = useState<'civic' | 'neighbourhood' | 'environment'>('civic');
 
-  /**
-   * Reverse-geocodes coordinates into a human-readable address using Nominatim
-   */
   const reverseGeocode = async (lat: number, lng: number) => {
     try {
       const res = await fetch(
         `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`
       );
       const data = await res.json();
-      if (data && data.display_name) {
+      if (data?.display_name) {
         setAddress(data.display_name);
       }
     } catch {
@@ -40,78 +39,54 @@ export default function GroundTruthDashboard() {
   };
 
   /**
-   * User-activated GPS location request
+   * Browser Location Handlers
    */
-  const requestCurrentLocation = async () => {
-    if (!('geolocation' in navigator)) {
-      alert('Geolocation is not supported by your browser.');
-      return;
+  const handleAllowLocation = () => {
+    setShowLocationModal(false);
+    if ('geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          setCoords({ lat, lng });
+          if (map.current) map.current.flyTo({ center: [lng, lat], zoom: 15 });
+          if (marker.current) marker.current.setLngLat([lng, lat]);
+          reverseGeocode(lat, lng);
+        },
+        () => {
+          // If browser or OS blocks it, stay on default
+          reverseGeocode(coords.lat, coords.lng);
+        },
+        { enableHighAccuracy: true, timeout: 8000 }
+      );
     }
-
-    if ('permissions' in navigator) {
-      try {
-        const permissionStatus = await navigator.permissions.query({ name: 'geolocation' });
-        if (permissionStatus.state === 'denied') {
-          setIsPermissionBlocked(true);
-          return;
-        }
-      } catch {
-        // Fall back to getCurrentPosition if permissions API fails
-      }
-    }
-
-    setLocating(true);
-    setIsPermissionBlocked(false);
-
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const userLat = position.coords.latitude;
-        const userLng = position.coords.longitude;
-
-        setCoords({ lat: userLat, lng: userLng });
-        setLocating(false);
-
-        if (map.current) {
-          map.current.flyTo({ center: [userLng, userLat], zoom: 15 });
-        }
-        if (marker.current) {
-          marker.current.setLngLat([userLng, userLat]);
-        }
-        reverseGeocode(userLat, userLng);
-      },
-      (error) => {
-        setLocating(false);
-        if (error.code === error.PERMISSION_DENIED) {
-          setIsPermissionBlocked(true);
-        } else {
-          console.warn(`Location acquisition failed: ${error.message}`);
-        }
-      },
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
-    );
   };
 
+  const handleDeclineLocation = () => {
+    setShowLocationModal(false);
+    reverseGeocode(coords.lat, coords.lng);
+  };
+
+  /**
+   * Initialize MapLibre Map
+   */
   useEffect(() => {
     let isMounted = true;
 
-    // Dynamically import standard maplibre-gl
     import('maplibre-gl').then((maplibreglModule: any) => {
       if (!isMounted || !mapContainer.current || map.current) return;
 
       const maplibregl = maplibreglModule.default || maplibreglModule;
 
-      // Inline Blob Worker to prevent cross-origin/MIME-type errors
       try {
         if (maplibregl.workerUrl !== undefined) {
-          const workerBlob = new Blob(
-            ['self.onmessage = function() {};'],
-            { type: 'application/javascript' }
-          );
+          const workerBlob = new Blob(['self.onmessage = function() {};'], {
+            type: 'application/javascript',
+          });
           maplibregl.workerUrl = URL.createObjectURL(workerBlob);
         }
       } catch {}
 
-      // Raster Style using OpenStreetMap tiles
       const rasterStyle: any = {
         version: 8,
         sources: {
@@ -144,7 +119,6 @@ export default function GroundTruthDashboard() {
         zoom: 14,
       });
 
-      // Interactive location marker
       marker.current = new maplibregl.Marker({
         draggable: true,
         color: '#10b981',
@@ -164,25 +138,6 @@ export default function GroundTruthDashboard() {
         setCoords({ lat, lng });
         reverseGeocode(lat, lng);
       });
-
-      // Passive check for geolocation on initial load
-      if ('geolocation' in navigator) {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            if (!isMounted) return;
-            const lat = pos.coords.latitude;
-            const lng = pos.coords.longitude;
-            setCoords({ lat, lng });
-            if (map.current) map.current.flyTo({ center: [lng, lat], zoom: 15 });
-            if (marker.current) marker.current.setLngLat([lng, lat]);
-            reverseGeocode(lat, lng);
-          },
-          () => {
-            // Silently fallback to default coordinates if not granted
-          },
-          { enableHighAccuracy: true, timeout: 5000 }
-        );
-      }
     });
 
     return () => {
@@ -194,9 +149,6 @@ export default function GroundTruthDashboard() {
     };
   }, []);
 
-  /**
-   * Forward-geocodes manually typed address string
-   */
   const handleAddressSearch = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && address.trim()) {
       try {
@@ -206,27 +158,20 @@ export default function GroundTruthDashboard() {
           )}`
         );
         const data = await res.json();
-        if (data && data.length > 0) {
+        if (data?.[0]) {
           const newLat = parseFloat(data[0].lat);
           const newLng = parseFloat(data[0].lon);
 
           setCoords({ lat: newLat, lng: newLng });
-          if (map.current) {
-            map.current.flyTo({ center: [newLng, newLat], zoom: 15 });
-          }
-          if (marker.current) {
-            marker.current.setLngLat([newLng, newLat]);
-          }
+          if (map.current) map.current.flyTo({ center: [newLng, newLat], zoom: 15 });
+          if (marker.current) marker.current.setLngLat([newLng, newLat]);
         }
       } catch (err) {
-        console.error('Search forward geocoding failed:', err);
+        console.error('Geocoding error:', err);
       }
     }
   };
 
-  /**
-   * Executes the GroundTruth spatial and NLP audit
-   */
   const runAudit = async () => {
     setLoading(true);
     try {
@@ -238,6 +183,7 @@ export default function GroundTruthDashboard() {
           latitude: coords.lat,
           longitude: coords.lng,
           rawListingText: listingText,
+          distanceKm,
         }),
       });
 
@@ -245,15 +191,9 @@ export default function GroundTruthDashboard() {
       setAuditResult(data);
 
       if (map.current && data.isochrone) {
-        if (map.current.getLayer('isochrone-line')) {
-          map.current.removeLayer('isochrone-line');
-        }
-        if (map.current.getLayer('isochrone-layer')) {
-          map.current.removeLayer('isochrone-layer');
-        }
-        if (map.current.getSource('isochrone-source')) {
-          map.current.removeSource('isochrone-source');
-        }
+        if (map.current.getLayer('isochrone-line')) map.current.removeLayer('isochrone-line');
+        if (map.current.getLayer('isochrone-layer')) map.current.removeLayer('isochrone-layer');
+        if (map.current.getSource('isochrone-source')) map.current.removeSource('isochrone-source');
 
         map.current.addSource('isochrone-source', {
           type: 'geojson',
@@ -270,7 +210,7 @@ export default function GroundTruthDashboard() {
           source: 'isochrone-source',
           paint: {
             'fill-color': '#10b981',
-            'fill-opacity': 0.35,
+            'fill-opacity': 0.3,
           },
         });
 
@@ -280,7 +220,7 @@ export default function GroundTruthDashboard() {
           source: 'isochrone-source',
           paint: {
             'line-color': '#059669',
-            'line-width': 2,
+            'line-width': 2.5,
           },
         });
 
@@ -293,38 +233,61 @@ export default function GroundTruthDashboard() {
     }
   };
 
+  const getScoreBadgeColor = (val: number | string) => {
+    if (typeof val !== 'number') return 'text-slate-400 border-slate-700 bg-slate-800';
+    if (val >= 75) return 'text-emerald-400 border-emerald-800 bg-emerald-950/60';
+    if (val >= 50) return 'text-amber-400 border-amber-800 bg-amber-950/60';
+    return 'text-rose-400 border-rose-800 bg-rose-950/60';
+  };
+
   return (
-    <main className="flex h-screen w-screen overflow-hidden font-sans">
-      {/* Left Control Panel */}
-      <div className="w-1/3 h-full bg-slate-900 text-white p-6 flex flex-col justify-between shadow-2xl z-10 overflow-y-auto">
-        <div>
-          <div className="flex items-center space-x-2 mb-6">
-            <span className="text-emerald-400 font-black text-2xl tracking-wider">GROUNDTRUTH</span>
-            <span className="text-xs bg-emerald-950 text-emerald-400 border border-emerald-800 px-2 py-0.5 rounded-full font-mono">
-              PRODUCTION
-            </span>
+    <main className="flex flex-col lg:flex-row h-screen w-screen overflow-hidden font-sans bg-slate-950 text-slate-100">
+      {/* Geolocation Decision Modal */}
+      {showLocationModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl">
+            <div className="flex items-center space-x-3 mb-4">
+              <span className="text-2xl">📍</span>
+              <h3 className="text-lg font-bold text-white">Enable Accurate Location?</h3>
+            </div>
+            <p className="text-sm text-slate-300 mb-6 leading-relaxed">
+              GroundTruth uses your precise coordinates to audit local amenities, monsoon waterlogging risks, and walking isochrones. Would you like to use your current GPS location or continue with the default location?
+            </p>
+            <div className="flex space-x-3 justify-end">
+              <button
+                type="button"
+                onClick={handleDeclineLocation}
+                className="px-4 py-2 text-xs font-semibold rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+              >
+                Use Default Location
+              </button>
+              <button
+                type="button"
+                onClick={handleAllowLocation}
+                className="px-5 py-2 text-xs font-semibold rounded-lg bg-emerald-500 hover:bg-emerald-600 text-slate-950 transition font-bold"
+              >
+                Allow GPS Location
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Control & Results Sidebar */}
+      <div className="w-full lg:w-[460px] h-full bg-slate-900 border-r border-slate-800 flex flex-col justify-between shadow-2xl z-20 overflow-y-auto">
+        <div className="p-6">
+          {/* Header */}
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center space-x-2">
+              <span className="text-emerald-400 font-black text-2xl tracking-wider">GROUNDTRUTH</span>
+              <span className="text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800 px-2 py-0.5 rounded-full font-mono uppercase">
+                AUDITOR
+              </span>
+            </div>
           </div>
 
+          {/* Form Inputs */}
           <div className="space-y-4">
-            {/* Auto-Blocked Guidance Banner */}
-            {isPermissionBlocked && (
-              <div className="bg-amber-950/80 border border-amber-600/60 text-amber-200 text-xs p-3 rounded-lg mb-3 flex items-start justify-between">
-                <div>
-                  <span className="font-bold">⚠️ Location Auto-Blocked</span>
-                  <p className="text-[11px] text-amber-300/90 mt-0.5">
-                    Click the <strong>tune/lock icon</strong> on the left side of your browser address bar, reset <strong>Location</strong> to <em>Ask</em> or <em>Allow</em>, and refresh. You can also click anywhere on the map or type an address manually.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsPermissionBlocked(false)}
-                  className="text-amber-400 hover:text-white ml-2 text-sm font-bold"
-                >
-                  ✕
-                </button>
-              </div>
-            )}
-
             <div>
               <div className="flex justify-between items-center mb-1">
                 <label className="text-xs uppercase text-slate-400 font-bold tracking-wider">
@@ -332,11 +295,10 @@ export default function GroundTruthDashboard() {
                 </label>
                 <button
                   type="button"
-                  onClick={requestCurrentLocation}
-                  disabled={locating}
-                  className="text-xs bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 px-2.5 py-1 rounded transition duration-150 flex items-center space-x-1 cursor-pointer disabled:opacity-50"
+                  onClick={handleAllowLocation}
+                  className="text-xs text-emerald-400 hover:underline flex items-center space-x-1"
                 >
-                  <span>{locating ? 'Locating...' : '📍 Use GPS Location'}</span>
+                  <span>📍 Locate Me</span>
                 </button>
               </div>
               <input
@@ -344,79 +306,242 @@ export default function GroundTruthDashboard() {
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
                 onKeyDown={handleAddressSearch}
-                placeholder="Type location & press Enter, or click anywhere on map"
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 text-sm focus:border-emerald-500 focus:outline-none"
+                placeholder="Address (Press Enter to search)"
+                className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 text-sm focus:border-emerald-500 focus:outline-none transition"
               />
               <div className="flex justify-between text-[11px] text-slate-500 mt-1 font-mono">
-                <span>Lat: {coords.lat.toFixed(5)}</span>
-                <span>Lng: {coords.lng.toFixed(5)}</span>
+                <span>Lat: {coords.lat.toFixed(4)}</span>
+                <span>Lng: {coords.lng.toFixed(4)}</span>
                 <span
                   className="text-emerald-500 hover:underline cursor-pointer"
                   onClick={() => {
                     if (map.current) map.current.flyTo({ center: [coords.lng, coords.lat], zoom: 15 });
                   }}
                 >
-                  Center Pin
+                  Recenter Map
                 </span>
+              </div>
+            </div>
+
+            {/* Distance Slider */}
+            <div>
+              <div className="flex justify-between text-xs mb-1">
+                <label className="uppercase text-slate-400 font-bold tracking-wider">
+                  Walking Audit Range
+                </label>
+                <span className="font-mono text-emerald-400 font-semibold">{distanceKm} km</span>
+              </div>
+              <input
+                type="range"
+                min="0.5"
+                max="5"
+                step="0.5"
+                value={distanceKm}
+                onChange={(e) => setDistanceKm(parseFloat(e.target.value))}
+                className="w-full accent-emerald-500 bg-slate-800 rounded-lg cursor-pointer"
+              />
+              <div className="flex justify-between text-[10px] text-slate-500 font-mono mt-0.5">
+                <span>0.5 km (~6 min)</span>
+                <span>Default: 2 km (~25 min)</span>
+                <span>5 km</span>
               </div>
             </div>
 
             <div>
               <label className="text-xs uppercase text-slate-400 font-bold tracking-wider">
-                Listing Description (Ad Copy)
+                Listing Claims / Ad Copy
               </label>
               <textarea
-                rows={4}
+                rows={3}
                 value={listingText}
                 onChange={(e) => setListingText(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 mt-1 text-sm focus:border-emerald-500 focus:outline-none"
+                placeholder="Paste broker marketing claims here..."
+                className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 mt-1 text-sm focus:border-emerald-500 focus:outline-none transition"
               />
             </div>
 
             <button
               onClick={runAudit}
               disabled={loading}
-              className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold py-3 rounded-lg transition duration-200 disabled:opacity-50 cursor-pointer"
+              className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold py-3 rounded-lg transition duration-200 disabled:opacity-50 cursor-pointer text-sm uppercase tracking-wider"
             >
-              {loading ? 'Auditing Spatial Reality...' : 'Run GroundTruth Audit'}
+              {loading ? 'Analyzing Spatial Reality...' : 'Generate GroundTruth Report'}
             </button>
           </div>
 
-          {/* Audit Output Results */}
+          {/* Audit Results Dashboard */}
           {auditResult && (
-            <div className="mt-6 border-t border-slate-800 pt-4">
-              <h3 className="text-sm font-semibold uppercase text-slate-400 mb-2">Audit Verdict</h3>
-              <div className="bg-slate-800 p-3 rounded-lg border border-slate-700 space-y-2">
-                <div className="flex justify-between text-xs">
-                  <span className="text-slate-400">Cache Status:</span>
-                  <span className="font-mono text-emerald-400">{auditResult.source}</span>
-                </div>
-                <div className="flex justify-between text-xs">
-                  <span className="text-slate-400">H3 Index:</span>
-                  <span className="font-mono text-slate-300">{auditResult.h3Index}</span>
-                </div>
-                {auditResult.extractedClaims?.length > 0 && (
-                  <div className="pt-2 border-t border-slate-700">
-                    <span className="text-xs text-amber-400 font-semibold">Flagged Marketing Claims:</span>
-                    {auditResult.extractedClaims.map((claim: any, idx: number) => (
-                      <p key={idx} className="text-xs text-slate-300 mt-1">
-                        • Claims {claim.claimed_time_minutes} min walk to "{claim.destination}"
-                      </p>
-                    ))}
+            <div className="mt-6 border-t border-slate-800 pt-5 space-y-4">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                GroundTruth Verified Scores
+              </h3>
+
+              {/* 4 Core Score Badges */}
+              <div className="grid grid-cols-2 gap-2.5">
+                <div className={`p-3 rounded-xl border ${getScoreBadgeColor(auditResult.scores?.civicInfrastructureScore)}`}>
+                  <div className="text-[11px] font-medium opacity-80 uppercase">Civic Infra</div>
+                  <div className="text-2xl font-black mt-1">
+                    {auditResult.scores?.civicInfrastructureScore ?? 'No data'}
+                    {typeof auditResult.scores?.civicInfrastructureScore === 'number' && <span className="text-xs font-normal">/100</span>}
                   </div>
+                </div>
+
+                <div className={`p-3 rounded-xl border ${getScoreBadgeColor(auditResult.scores?.neighbourhoodScore)}`}>
+                  <div className="text-[11px] font-medium opacity-80 uppercase">Neighbourhood</div>
+                  <div className="text-2xl font-black mt-1">
+                    {auditResult.scores?.neighbourhoodScore ?? 'No data'}
+                    {typeof auditResult.scores?.neighbourhoodScore === 'number' && <span className="text-xs font-normal">/100</span>}
+                  </div>
+                </div>
+
+                <div className={`p-3 rounded-xl border ${getScoreBadgeColor(auditResult.scores?.environmentalScore)}`}>
+                  <div className="text-[11px] font-medium opacity-80 uppercase">Environmental</div>
+                  <div className="text-2xl font-black mt-1">
+                    {auditResult.scores?.environmentalScore ?? 'No data'}
+                    {typeof auditResult.scores?.environmentalScore === 'number' && <span className="text-xs font-normal">/100</span>}
+                  </div>
+                </div>
+
+                <div className={`p-3 rounded-xl border ${getScoreBadgeColor(auditResult.scores?.commuteRealityScore)}`}>
+                  <div className="text-[11px] font-medium opacity-80 uppercase">Commute Reality</div>
+                  <div className="text-2xl font-black mt-1">
+                    {auditResult.scores?.commuteRealityScore ?? 'No data'}
+                    {typeof auditResult.scores?.commuteRealityScore === 'number' && <span className="text-xs font-normal">/100</span>}
+                  </div>
+                </div>
+              </div>
+
+              {/* Tab Navigation for Detailed Breakdown */}
+              <div className="flex border-b border-slate-800 pt-2 text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('civic')}
+                  className={`pb-2 mr-4 ${activeTab === 'civic' ? 'text-emerald-400 border-b-2 border-emerald-400' : 'text-slate-400 hover:text-slate-200'}`}
+                >
+                  Civic Amenities
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('neighbourhood')}
+                  className={`pb-2 mr-4 ${activeTab === 'neighbourhood' ? 'text-emerald-400 border-b-2 border-emerald-400' : 'text-slate-400 hover:text-slate-200'}`}
+                >
+                  Neighbourhood
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('environment')}
+                  className={`pb-2 ${activeTab === 'environment' ? 'text-emerald-400 border-b-2 border-emerald-400' : 'text-slate-400 hover:text-slate-200'}`}
+                >
+                  Environment
+                </button>
+              </div>
+
+              {/* Detailed Breakdown Content */}
+              <div className="bg-slate-850 bg-slate-900/90 p-3.5 rounded-xl border border-slate-800 text-xs space-y-2">
+                {activeTab === 'civic' && (
+                  <>
+                    <div className="flex justify-between py-1 border-b border-slate-800/60">
+                      <span className="text-slate-400">Hospitals / Clinics:</span>
+                      <span className="font-semibold text-slate-200">{auditResult.breakdowns?.civic?.hospitalsNearby ?? 'No data'}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-800/60">
+                      <span className="text-slate-400">Schools:</span>
+                      <span className="font-semibold text-slate-200">{auditResult.breakdowns?.civic?.schoolsNearby ?? 'No data'}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-800/60">
+                      <span className="text-slate-400">Grocery Stores / Supermarkets:</span>
+                      <span className="font-semibold text-slate-200">{auditResult.breakdowns?.civic?.groceryHubs ?? 'No data'}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-800/60">
+                      <span className="text-slate-400">Pharmacies / Chemist Shops:</span>
+                      <span className="font-semibold text-slate-200">{auditResult.breakdowns?.civic?.chemistShops ?? 'No data'}</span>
+                    </div>
+                    <div className="py-1 border-b border-slate-800/60">
+                      <span className="text-slate-400 block mb-0.5">E-Commerce Deliveries:</span>
+                      <span className="text-emerald-400 text-[11px]">{auditResult.breakdowns?.civic?.deliveryAvailability ?? 'No data'}</span>
+                    </div>
+                    <div className="py-1">
+                      <span className="text-slate-400 block mb-0.5">Ride Hailing:</span>
+                      <span className="text-emerald-400 text-[11px]">{auditResult.breakdowns?.civic?.onlineRidesAvailability ?? 'No data'}</span>
+                    </div>
+                  </>
+                )}
+
+                {activeTab === 'neighbourhood' && (
+                  <>
+                    <div className="flex justify-between py-1 border-b border-slate-800/60">
+                      <span className="text-slate-400">Schooling Cluster:</span>
+                      <span className="font-semibold text-slate-200">{auditResult.breakdowns?.neighbourhood?.schoolingQuality ?? 'No data'}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-800/60">
+                      <span className="text-slate-400">Crime Risk Index:</span>
+                      <span className="font-semibold text-slate-200">{auditResult.breakdowns?.neighbourhood?.crimeStatistics ?? 'No data'}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-800/60">
+                      <span className="text-slate-400">Water Supply:</span>
+                      <span className="font-semibold text-slate-200">{auditResult.breakdowns?.neighbourhood?.waterAvailability ?? 'No data'}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-800/60">
+                      <span className="text-slate-400">Power Outages:</span>
+                      <span className="font-semibold text-slate-200">{auditResult.breakdowns?.neighbourhood?.powerOutageFrequency ?? 'No data'}</span>
+                    </div>
+                    <div className="py-1 border-b border-slate-800/60">
+                      <span className="text-slate-400 block mb-0.5">Waste Dump / Open Sewage Canal:</span>
+                      <span className="text-amber-400 text-[11px]">{auditResult.breakdowns?.neighbourhood?.dumpWasteOrSewageCanal ?? 'No data'}</span>
+                    </div>
+                    <div className="py-1">
+                      <span className="text-slate-400 block mb-0.5">Future Infrastructure Plans:</span>
+                      <span className="text-slate-300 text-[11px]">{auditResult.breakdowns?.neighbourhood?.futureInfrastructurePlans ?? 'No data'}</span>
+                    </div>
+                  </>
+                )}
+
+                {activeTab === 'environment' && (
+                  <>
+                    <div className="flex justify-between py-1 border-b border-slate-800/60">
+                      <span className="text-slate-400">Monsoon Vulnerability:</span>
+                      <span className="font-semibold text-amber-400">{auditResult.breakdowns?.environmental?.monsoonVulnerability ?? 'No data'}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-800/60">
+                      <span className="text-slate-400">Air Quality Index:</span>
+                      <span className="font-semibold text-slate-200">{auditResult.breakdowns?.environmental?.airQualityIndex ?? 'No data'}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-800/60">
+                      <span className="text-slate-400">Temperature & Microclimate:</span>
+                      <span className="font-semibold text-slate-200">{auditResult.breakdowns?.environmental?.generalTemperature ?? 'No data'}</span>
+                    </div>
+                    <div className="flex justify-between py-1">
+                      <span className="text-slate-400">Solar Heat Impedance:</span>
+                      <span className="font-semibold text-slate-300">{auditResult.breakdowns?.environmental?.thermalHeatPenalty ?? 'No data'}</span>
+                    </div>
+                  </>
                 )}
               </div>
+
+              {/* Extracted Marketing Discrepancies */}
+              {auditResult.extractedClaims?.length > 0 && (
+                <div className="p-3 bg-amber-950/40 border border-amber-800/60 rounded-xl">
+                  <span className="text-xs font-bold text-amber-400 uppercase tracking-wide block mb-1">
+                    Audited Marketing Claims
+                  </span>
+                  {auditResult.extractedClaims.map((claim: any, idx: number) => (
+                    <p key={idx} className="text-xs text-amber-200/90 mt-1">
+                      • Claims {claim.claimed_time_minutes} min {claim.transport_mode} to &ldquo;{claim.destination}&rdquo;
+                    </p>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
 
-        <p className="text-xs text-slate-500 text-center">
-          GroundTruth © 2026. Zero-cost production geospatial architecture.
-        </p>
+        <div className="p-4 border-t border-slate-800 text-[11px] text-slate-500 text-center">
+          GroundTruth © 2026. Empirical due diligence & geospatial intelligence.
+        </div>
       </div>
 
-      {/* Right Map Canvas */}
-      <div ref={mapContainer} className="w-2/3 h-full relative cursor-crosshair" />
+      {/* Main Map Canvas */}
+      <div ref={mapContainer} className="flex-1 h-[50vh] lg:h-full relative cursor-crosshair" />
     </main>
   );
 }
