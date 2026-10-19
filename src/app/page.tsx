@@ -7,6 +7,8 @@ export default function GroundTruthDashboard() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<any>(null);
   const marker = useRef<any>(null);
+  const activePopup = useRef<any>(null);
+  const maplibreglRef = useRef<any>(null);
 
   // Default coordinates: Bengaluru
   const [coords, setCoords] = useState<{ lat: number; lng: number }>({
@@ -67,6 +69,7 @@ export default function GroundTruthDashboard() {
       if (!isMounted || !mapContainer.current || map.current) return;
 
       const maplibregl = maplibreglModule.default || maplibreglModule;
+      maplibreglRef.current = maplibregl;
 
       try {
         if (maplibregl.workerUrl !== undefined) {
@@ -116,19 +119,19 @@ export default function GroundTruthDashboard() {
         .setLngLat([coords.lng, coords.lat])
         .addTo(map.current);
 
-      // Drag listener: Updates location coordinates and address
       marker.current.on('dragend', () => {
         const lngLat = marker.current.getLngLat();
         setCoords({ lat: lngLat.lat, lng: lngLat.lng });
         reverseGeocode(lngLat.lat, lngLat.lng);
+        if (activePopup.current) activePopup.current.remove();
       });
 
-      // Map Click listener: Move marker to clicked point
       map.current.on('click', (e: any) => {
         const { lng, lat } = e.lngLat;
         marker.current.setLngLat([lng, lat]);
         setCoords({ lat, lng });
         reverseGeocode(lat, lng);
+        if (activePopup.current) activePopup.current.remove();
       });
     });
 
@@ -157,6 +160,7 @@ export default function GroundTruthDashboard() {
           setCoords({ lat: newLat, lng: newLng });
           if (map.current) map.current.flyTo({ center: [newLng, newLat], zoom: 15 });
           if (marker.current) marker.current.setLngLat([newLng, newLat]);
+          if (activePopup.current) activePopup.current.remove();
         }
       } catch (err) {
         console.error('Search forward geocoding failed:', err);
@@ -164,6 +168,9 @@ export default function GroundTruthDashboard() {
     }
   };
 
+  /**
+   * Generates audit and binds spatial HUD overlays directly on top of the map
+   */
   const runAudit = async () => {
     setLoading(true);
     try {
@@ -182,10 +189,12 @@ export default function GroundTruthDashboard() {
       setAuditResult(data);
 
       if (map.current && data.isochrone) {
+        // Clean up existing map layers
         if (map.current.getLayer('isochrone-line')) map.current.removeLayer('isochrone-line');
         if (map.current.getLayer('isochrone-layer')) map.current.removeLayer('isochrone-layer');
         if (map.current.getSource('isochrone-source')) map.current.removeSource('isochrone-source');
 
+        // Add Isochrone geometry layer
         map.current.addSource('isochrone-source', {
           type: 'geojson',
           data: {
@@ -215,7 +224,62 @@ export default function GroundTruthDashboard() {
           },
         });
 
+        // Focus map view to fit bounds
         map.current.flyTo({ center: [coords.lng, coords.lat], zoom: 14 });
+
+        // Remove previous popup if exists
+        if (activePopup.current) {
+          activePopup.current.remove();
+        }
+
+        // Render an interactive On-Map HUD Popup directly over the marker
+        const maplibregl = maplibreglRef.current;
+        if (maplibregl) {
+          const popupHtml = `
+            <div style="font-family: system-ui, sans-serif; min-width: 260px; padding: 4px; color: #0f172a;">
+              <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; margin-bottom: 8px;">
+                <span style="font-weight: 800; font-size: 13px; color: #047857; text-transform: uppercase; letter-spacing: 0.5px;">GROUNDTRUTH AUDIT</span>
+                <span style="font-size: 11px; background: #d1fae5; color: #065f46; padding: 2px 6px; border-radius: 9999px; font-weight: 700;">${distanceKm} KM WALKSPEC</span>
+              </div>
+              
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px;">
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px; text-align: center;">
+                  <div style="font-size: 10px; color: #64748b; font-weight: 600; text-transform: uppercase;">Civic Infra</div>
+                  <div style="font-size: 16px; font-weight: 900; color: #0f172a;">${data.scores?.civicInfrastructureScore ?? 'N/A'}<span style="font-size: 10px; font-weight: 400; color: #64748b;">/100</span></div>
+                </div>
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px; text-align: center;">
+                  <div style="font-size: 10px; color: #64748b; font-weight: 600; text-transform: uppercase;">Neighbourhood</div>
+                  <div style="font-size: 16px; font-weight: 900; color: #0f172a;">${data.scores?.neighbourhoodScore ?? 'N/A'}<span style="font-size: 10px; font-weight: 400; color: #64748b;">/100</span></div>
+                </div>
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px; text-align: center;">
+                  <div style="font-size: 10px; color: #64748b; font-weight: 600; text-transform: uppercase;">Environment</div>
+                  <div style="font-size: 16px; font-weight: 900; color: #0f172a;">${data.scores?.environmentalScore ?? 'N/A'}<span style="font-size: 10px; font-weight: 400; color: #64748b;">/100</span></div>
+                </div>
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px; text-align: center;">
+                  <div style="font-size: 10px; color: #64748b; font-weight: 600; text-transform: uppercase;">Walk Reality</div>
+                  <div style="font-size: 16px; font-weight: 900; color: #0f172a;">${data.scores?.commuteRealityScore ?? 'N/A'}<span style="font-size: 10px; font-weight: 400; color: #64748b;">/100</span></div>
+                </div>
+              </div>
+
+              <div style="font-size: 11px; background: #f1f5f9; padding: 6px 8px; border-radius: 6px; line-height: 1.4; color: #334155;">
+                🏥 <strong>${data.breakdowns?.civic?.hospitalsNearby ?? 0}</strong> Hospitals &bull; 
+                🏫 <strong>${data.breakdowns?.civic?.schoolsNearby ?? 0}</strong> Schools &bull; 
+                🛒 <strong>${data.breakdowns?.civic?.groceryHubs ?? 0}</strong> Marts &bull;
+                💊 <strong>${data.breakdowns?.civic?.chemistShops ?? 0}</strong> Chemists
+              </div>
+            </div>
+          `;
+
+          activePopup.current = new maplibregl.Popup({
+            closeButton: true,
+            closeOnClick: false,
+            maxWidth: '320px',
+            offset: 25,
+          })
+            .setLngLat([coords.lng, coords.lat])
+            .setHTML(popupHtml)
+            .addTo(map.current);
+        }
       }
     } catch (err) {
       console.error('Audit execution error:', err);
@@ -242,7 +306,7 @@ export default function GroundTruthDashboard() {
               <h3 className="text-lg font-bold text-white">Enable Accurate Location?</h3>
             </div>
             <p className="text-sm text-slate-300 mb-6 leading-relaxed">
-              GroundTruth uses your precise coordinates to audit local amenities, monsoon waterlogging risks, and walking boundaries. Would you like to use your current GPS location or continue with the default location?
+              GroundTruth uses your coordinates to calculate real-world walking isochrones, nearby civic amenities, and flood hazards. Would you like to use your current GPS location or continue with the default position?
             </p>
             <div className="flex space-x-3 justify-end">
               <button
@@ -350,9 +414,14 @@ export default function GroundTruthDashboard() {
           {/* Audit Results Dashboard */}
           {auditResult && (
             <div className="mt-6 border-t border-slate-800 pt-5 space-y-4">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                GroundTruth Verified Scores
-              </h3>
+              <div className="flex justify-between items-center">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                  Verified Summary
+                </h3>
+                <span className="text-[11px] text-emerald-400 bg-emerald-950 border border-emerald-800 px-2 py-0.5 rounded-full font-mono">
+                  VISUALIZED ON MAP
+                </span>
+              </div>
 
               {/* 4 Core Score Cards */}
               <div className="grid grid-cols-2 gap-2.5">
@@ -500,12 +569,28 @@ export default function GroundTruthDashboard() {
         </div>
 
         <div className="p-4 border-t border-slate-800 text-[11px] text-slate-500 text-center">
-          GroundTruth © 2026. Zero-cost production geospatial architecture.
+          GroundTruth © 2026. Empirical due diligence & geospatial intelligence.
         </div>
       </div>
 
-      {/* Main Map Viewport */}
-      <div ref={mapContainer} className="flex-1 h-[50vh] lg:h-full relative cursor-crosshair" />
+      {/* Main Map Viewport with Visual Overlay Controls */}
+      <div className="flex-1 h-[50vh] lg:h-full relative cursor-crosshair">
+        <div ref={mapContainer} className="w-full h-full" />
+        
+        {/* Floating Map Legend Indicator */}
+        {auditResult && (
+          <div className="absolute top-4 right-4 bg-slate-900/90 backdrop-blur border border-slate-800 px-3 py-2 rounded-xl text-[11px] text-slate-300 shadow-xl flex items-center space-x-3 pointer-events-none z-10">
+            <div className="flex items-center space-x-1.5">
+              <span className="w-3 h-3 rounded-full bg-emerald-500/40 border border-emerald-400 inline-block" />
+              <span>{distanceKm} km Reach Boundary</span>
+            </div>
+            <div className="flex items-center space-x-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block" />
+              <span>Target Coordinates</span>
+            </div>
+          </div>
+        )}
+      </div>
     </main>
   );
 }
