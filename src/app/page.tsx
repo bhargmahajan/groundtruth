@@ -47,6 +47,7 @@ export default function GroundTruthDashboard() {
   useEffect(() => {
     let isMounted = true;
 
+    // @ts-ignore
     import('maplibre-gl/dist/maplibre-gl').then((maplibreglModule) => {
       if (!isMounted || !mapContainer.current || map.current) return;
 
