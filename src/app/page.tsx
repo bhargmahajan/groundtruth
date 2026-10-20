@@ -13,18 +13,38 @@ export default function GroundTruthDashboard() {
 
   const handleGenerateReport = async () => {
     setLoading(true);
+    console.log(`[Client] Requesting report for: ${coords.lat}, ${coords.lng} (${radiusKm} km)`);
     try {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lat: coords.lat, lng: coords.lng, radiusKm }),
       });
+  
       const data = await res.json();
+      console.log("[Client] Raw API Response:", data);
+  
       if (data.status === "success") {
+        console.group("%cGroundTruth Report Generated", "color: #38bdf8; font-weight: bold; font-size: 14px;");
+        console.log("Scores:", {
+          Civic: data.metrics.civicInfrastructureScore,
+          Environmental: data.metrics.environmentalScore,
+          Commute: data.metrics.commuteRealityScore,
+        });
+        console.table(data.metrics.amenityBreakdown);
+        console.log("Walkability & Climate:", {
+          Walkability: data.metrics.walkability,
+          Climate: data.metrics.climate,
+        });
+        console.log("Full Report Object:", data.metrics);
+        console.groupEnd();
+  
         setReport(data.metrics);
+      } else {
+        console.error("[Client] API Error:", data.message);
       }
     } catch (err) {
-      console.error(err);
+      console.error("[Client] Network/Runtime Error:", err);
     } finally {
       setLoading(false);
     }

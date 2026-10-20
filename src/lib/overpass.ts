@@ -1,3 +1,4 @@
+// src/lib/overpass.ts
 const OVERPASS_MIRRORS = [
   "https://overpass-api.de/api/interpreter",
   "https://lz4.overpass-api.de/api/interpreter",
@@ -5,6 +6,7 @@ const OVERPASS_MIRRORS = [
 ];
 
 export async function fetchCivicPOIs(lat: number, lng: number, radiusMeters: number) {
+  // Use 'out tags center;' so tags (amenity, waterway, etc.) are included in the output
   const query = `
     [out:json][timeout:25];
     (
@@ -15,12 +17,13 @@ export async function fetchCivicPOIs(lat: number, lng: number, radiusMeters: num
       nwr["landuse"="landfill"](around:${radiusMeters},${lat},${lng});
       nwr["waterway"~"drain|ditch|canal"](around:${radiusMeters},${lat},${lng});
     );
-    out center count;
+    out tags center;
   `;
 
   for (let attempt = 0; attempt < OVERPASS_MIRRORS.length; attempt++) {
     const endpoint = OVERPASS_MIRRORS[attempt];
     try {
+      console.log(`[Overpass] Fetching from ${endpoint} (Attempt ${attempt + 1})...`);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 12000);
 
@@ -33,17 +36,22 @@ export async function fetchCivicPOIs(lat: number, lng: number, radiusMeters: num
       clearTimeout(timeoutId);
 
       if (res.status === 429) {
-        // Backoff delay before trying next mirror
+        console.warn(`[Overpass] 429 Rate limited on ${endpoint}. Retrying next mirror...`);
         await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
         continue;
       }
 
-      if (!res.ok) throw new Error(`Status ${res.status}`);
+      if (!res.ok) {
+        console.warn(`[Overpass] Failed with status ${res.status} on ${endpoint}`);
+        continue;
+      }
+
       const data = await res.json();
+      console.log(`[Overpass] Raw elements retrieved: ${data.elements?.length ?? 0}`);
       return parseOverpassElements(data.elements || []);
-    } catch {
+    } catch (err: any) {
+      console.error(`[Overpass] Error on ${endpoint}:`, err?.message || err);
       if (attempt === OVERPASS_MIRRORS.length - 1) {
-        // Return empty baseline rather than throwing runtime error
         return getFallbackCivicCounts();
       }
     }
