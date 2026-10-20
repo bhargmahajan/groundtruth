@@ -2,8 +2,6 @@ import { NextResponse } from "next/server";
 import { fetchCivicPOIs } from "@/lib/overpass";
 import { getClimateData, computeWalkability } from "@/lib/climate";
 
-export const runtime = "edge";
-
 export async function POST(req: Request) {
   try {
     const body = await req.json();
