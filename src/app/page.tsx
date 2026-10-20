@@ -1,189 +1,480 @@
-// src/app/page.tsx
 "use client";
 
-import React, { useState } from "react";
-import LocationModal from "@/components/LocationModal";
+import { useCallback, useState } from "react";
+import LocationInput, { DEFAULT_BANGALORE, type LocationData } from "@/components/LocationInput";
+import type { AmenityCounts, NeighborhoodReport, ScoreMetric } from "@/lib/report-types";
 
-export default function GroundTruthDashboard() {
-  const [coords, setCoords] = useState({ lat: 12.9716, lng: 77.5946 });
-  const [locationLabel, setLocationLabel] = useState("Bengaluru, Karnataka");
-  const [radiusKm, setRadiusKm] = useState<number>(1);
-  const [loading, setLoading] = useState(false);
-  const [report, setReport] = useState<any>(null);
+const amenityLabels: Record<keyof AmenityCounts, string> = {
+  schools: "Schools",
+  hospitals: "Hospitals",
+  clinicsAndDoctors: "Clinics & doctors",
+  groceries: "Grocery shops",
+  markets: "Markets",
+  chemists: "Chemists",
+  metroStations: "Metro stations",
+  metroEntrances: "Metro entrances",
+  temples: "Temples",
+  mosques: "Mosques",
+  churches: "Churches",
+  otherPlacesOfWorship: "Other worship",
+  mappedWasteSites: "Mapped waste sites",
+  mappedDrainageFeatures: "Mapped drains & canals",
+};
 
-  const handleGenerateReport = async () => {
-    setLoading(true);
-    console.log(`[Client] Requesting report for: ${coords.lat}, ${coords.lng} (${radiusKm} km)`);
+function ScoreCard({ title, metric, color }: { title: string; metric: ScoreMetric; color: string }) {
+  return (
+    <article className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-lg shadow-black/10">
+      <div className="flex items-start justify-between gap-3">
+        <h3 className="text-sm font-medium text-slate-300">{title}</h3>
+        <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-wider text-slate-500">
+          proxy
+        </span>
+      </div>
+      <p className="mt-4 text-4xl font-semibold tracking-tight text-white">
+        {metric.value === null ? "—" : metric.value}
+        {metric.value !== null && <span className="ml-1 text-sm font-normal text-slate-500">/100</span>}
+      </p>
+      <div
+        className="mt-4 h-2 overflow-hidden rounded-full bg-slate-800"
+        role="progressbar"
+        aria-label={`${title} score`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={metric.value ?? undefined}
+      >
+        <div
+          className={`h-full rounded-full transition-all ${color}`}
+          style={{ width: `${metric.value ?? 0}%` }}
+        />
+      </div>
+      <p className="mt-3 text-xs leading-relaxed text-slate-500">{metric.basis}</p>
+    </article>
+  );
+}
+
+function DashboardSection({
+  eyebrow,
+  title,
+  description,
+  children,
+}: {
+  eyebrow: string;
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="space-y-4" aria-label={title}>
+      <div>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-400">{eyebrow}</p>
+        <h3 className="mt-1 text-lg font-semibold text-white">{title}</h3>
+        {description && <p className="mt-1 text-sm text-slate-400">{description}</p>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+export default function HomePage() {
+  const [location, setLocation] = useState<LocationData>(DEFAULT_BANGALORE);
+  const [locationQuery, setLocationQuery] = useState(DEFAULT_BANGALORE.label);
+  const [range, setRange] = useState(1);
+  const [report, setReport] = useState<NeighborhoodReport | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const handleLocationChange = useCallback((newLocation: LocationData) => {
+    setLocation(newLocation);
+    setLocationQuery(newLocation.label);
+    setReport(null);
+  }, []);
+  const handleLocationQueryChange = useCallback((query: string) => {
+    setLocationQuery(query);
+    setReport(null);
+    setReportError(null);
+  }, []);
+
+  const generateReport = async () => {
+    if (locationQuery.trim() !== location.label) {
+      setReportError("Select a location suggestion or enter valid coordinates before generating the report.");
+      return;
+    }
+    setIsGenerating(true);
+    setReportError(null);
     try {
-      const res = await fetch("/api/analyze", {
+      const response = await fetch("/api/report", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lat: coords.lat, lng: coords.lng, radiusKm }),
+        body: JSON.stringify({ location, radiusKm: range }),
       });
-  
-      const data = await res.json();
-      console.log("[Client] Raw API Response:", data);
-  
-      if (data.status === "success") {
-        console.group("%cGroundTruth Report Generated", "color: #38bdf8; font-weight: bold; font-size: 14px;");
-        console.log("Scores:", {
-          Civic: data.metrics.civicInfrastructureScore,
-          Environmental: data.metrics.environmentalScore,
-          Commute: data.metrics.commuteRealityScore,
-        });
-        console.table(data.metrics.amenityBreakdown);
-        console.log("Walkability & Climate:", {
-          Walkability: data.metrics.walkability,
-          Climate: data.metrics.climate,
-        });
-        console.log("Full Report Object:", data.metrics);
-        console.groupEnd();
-  
-        setReport(data.metrics);
-      } else {
-        console.error("[Client] API Error:", data.message);
+      const result = (await response.json()) as {
+        report?: NeighborhoodReport;
+        error?: string;
+      };
+      if (!response.ok || !result.report) {
+        throw new Error(result.error ?? "The report could not be generated.");
       }
-    } catch (err) {
-      console.error("[Client] Network/Runtime Error:", err);
+      setReport(result.report);
+    } catch (error) {
+      setReportError(
+        error instanceof Error ? error.message : "The report could not be generated.",
+      );
     } finally {
-      setLoading(false);
+      setIsGenerating(false);
     }
   };
 
-  return (
-    <main className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center py-12 px-4 sm:px-6">
-      <LocationModal
-        onLocationResolved={(loc) => {
-          setCoords(loc.coords);
-          setLocationLabel(loc.label);
-        }}
-      />
+  const amenityEntries = report?.amenities
+    ? (Object.entries(report.amenities) as Array<[keyof AmenityCounts, number]>)
+    : [];
+  const maxAmenityCount = Math.max(1, ...amenityEntries.map(([, count]) => count));
 
-      <div className="w-full max-w-5xl space-y-8">
-        <header className="border-b border-slate-800 pb-6 flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+  return (
+    <main className="min-h-screen bg-[#080d18] px-4 py-8 text-slate-100 sm:px-6">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-8">
+        <header className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-extrabold tracking-tight text-white">GroundTruth</h1>
-            <p className="text-sm text-slate-400 mt-1">Civic infrastructure & environmental sanity scanner</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-400">
+              GroundTruth · Neighbourhood intelligence
+            </p>
+            <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+              Local area report
+            </h1>
+            <p className="mt-1 text-sm text-slate-400">
+              Explore civic access, local conditions, and service availability.
+            </p>
           </div>
-          <div className="text-xs bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-full text-slate-300">
-            Zero-Cost Production Engine
-          </div>
+          {report && (
+            <span className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs text-slate-400">
+              Updated {new Date(report.generatedAt).toLocaleString()}
+            </span>
+          )}
         </header>
 
-        {/* Input Bar */}
-        <section className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-md grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
-          <div className="space-y-2">
-            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Target Coordinates</label>
-            <div className="flex gap-2">
+        <section
+          aria-label="Report location and range"
+          className="grid gap-6 rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl shadow-black/20 lg:grid-cols-[1fr_280px]"
+        >
+          <LocationInput
+            value={location}
+            onChange={handleLocationChange}
+            onQueryChange={handleLocationQueryChange}
+          />
+          <div className="flex flex-col justify-end gap-4">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label
+                  htmlFor="search-range"
+                  className="text-xs font-semibold uppercase tracking-wider text-slate-400"
+                >
+                  Search radius
+                </label>
+                <output htmlFor="search-range" className="text-sm font-semibold text-sky-400">
+                  {range.toFixed(1)} km
+                </output>
+              </div>
               <input
-                type="text"
-                value={`${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}`}
-                onChange={(e) => {
-                  const [lat, lng] = e.target.value.split(",").map((v) => parseFloat(v.trim()));
-                  if (!isNaN(lat) && !isNaN(lng)) setCoords({ lat, lng });
+                id="search-range"
+                type="range"
+                min="0.5"
+                max="5"
+                step="0.5"
+                value={range}
+                onChange={(event) => {
+                  setRange(Number(event.target.value));
+                  setReport(null);
+                  setReportError(null);
                 }}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+                aria-valuetext={`${range.toFixed(1)} kilometers`}
+                className="w-full cursor-pointer accent-sky-500"
               />
+              <div className="flex justify-between text-xs text-slate-500">
+                <span>0.5 km</span>
+                <span>5 km</span>
+              </div>
             </div>
-            <span className="text-xs text-slate-500 block truncate">{locationLabel}</span>
+            <button
+              type="button"
+              onClick={generateReport}
+              disabled={isGenerating}
+              className="w-full rounded-xl bg-sky-500 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-400 disabled:cursor-wait disabled:opacity-60"
+            >
+              {isGenerating ? "Generating report…" : "Generate report"}
+            </button>
+            {reportError && (
+              <p role="alert" className="text-sm text-red-400">
+                {reportError}
+              </p>
+            )}
           </div>
-
-          <div className="space-y-2">
-            <div className="flex justify-between items-center">
-              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Radius Scope</label>
-              <span className="text-xs font-bold text-blue-400">{radiusKm} km</span>
-            </div>
-            <input
-              type="range"
-              min="0.5"
-              max="5"
-              step="0.5"
-              value={radiusKm}
-              onChange={(e) => setRadiusKm(parseFloat(e.target.value))}
-              className="w-full accent-blue-500"
-            />
-            <div className="flex justify-between text-[10px] text-slate-500">
-              <span>500m</span>
-              <span>1 km (Default)</span>
-              <span>5 km</span>
-            </div>
-          </div>
-
-          <button
-            onClick={handleGenerateReport}
-            disabled={loading}
-            className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-500 font-semibold rounded-xl text-white transition disabled:opacity-50"
-          >
-            {loading ? "Scanning Terrain..." : "Generate Report"}
-          </button>
         </section>
 
-        {/* Report Output */}
         {report && (
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
-                <span className="text-xs text-slate-400 font-medium">Civic Infrastructure</span>
-                <p className="text-3xl font-bold mt-1 text-blue-400">{report.civicInfrastructureScore} / 100</p>
+          <div className="space-y-8">
+            <section
+              aria-labelledby="report-title"
+              className="flex flex-wrap items-end justify-between gap-4 rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-900/60 p-6"
+            >
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wider text-slate-500">
+                  Report area
+                </p>
+                <h2 id="report-title" className="mt-1 text-2xl font-semibold text-white">
+                  {report.location.label}
+                </h2>
+                <p className="mt-1 text-sm text-slate-400">
+                  {report.location.lat.toFixed(4)}, {report.location.lng.toFixed(4)} ·{" "}
+                  {report.location.radiusKm.toFixed(1)} km radius
+                </p>
               </div>
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
-                <span className="text-xs text-slate-400 font-medium">Environmental Score</span>
-                <p className="text-3xl font-bold mt-1 text-emerald-400">{report.environmentalScore} / 100</p>
-              </div>
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
-                <span className="text-xs text-slate-400 font-medium">Commute Reality</span>
-                <p className="text-3xl font-bold mt-1 text-amber-400">{report.commuteRealityScore} / 100</p>
-              </div>
-            </div>
+              <p className="max-w-sm text-xs leading-relaxed text-slate-500">
+                Scores are transparent, unofficial indicators based only on the available data.
+                Missing information is shown as unavailable, never as zero.
+              </p>
+            </section>
 
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
-              <h3 className="text-base font-semibold text-white">Amenity Breakdown ({radiusKm} km Radius)</h3>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
-                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                  <span className="text-slate-400 block text-xs">Schools</span>
-                  <span className="text-lg font-bold">{report.amenityBreakdown.schools}</span>
-                </div>
-                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                  <span className="text-slate-400 block text-xs">Hospitals / Clinics</span>
-                  <span className="text-lg font-bold">{report.amenityBreakdown.hospitals}</span>
-                </div>
-                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                  <span className="text-slate-400 block text-xs">Pharmacies</span>
-                  <span className="text-lg font-bold">{report.amenityBreakdown.pharmacies}</span>
-                </div>
-                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                  <span className="text-slate-400 block text-xs">Metro Stations</span>
-                  <span className="text-lg font-bold">{report.amenityBreakdown.metroStations}</span>
-                </div>
-                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                  <span className="text-slate-400 block text-xs">Temples</span>
-                  <span className="text-lg font-bold">{report.amenityBreakdown.temples}</span>
-                </div>
-                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                  <span className="text-slate-400 block text-xs">Mosques</span>
-                  <span className="text-lg font-bold">{report.amenityBreakdown.mosques}</span>
-                </div>
-                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                  <span className="text-slate-400 block text-xs">Churches</span>
-                  <span className="text-lg font-bold">{report.amenityBreakdown.churches}</span>
-                </div>
-                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                  <span className="text-slate-400 block text-xs">Waste Dumps / Canals</span>
-                  <span className="text-lg font-bold text-red-400">
-                    {report.amenityBreakdown.openDumps + report.amenityBreakdown.drainageCanals}
-                  </span>
-                </div>
+            <DashboardSection
+              eyebrow="At a glance"
+              title="Neighbourhood scores"
+              description="An at-a-glance comparison of the available report indicators. These are proxies, not official ratings."
+            >
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <ScoreCard
+                  title="Civic infrastructure"
+                  metric={report.scores.civicInfrastructure}
+                  color="bg-sky-400"
+                />
+                <ScoreCard
+                  title="Environmental"
+                  metric={report.scores.environmental}
+                  color="bg-emerald-400"
+                />
+                <ScoreCard
+                  title="Neighbourhood scout"
+                  metric={report.scores.neighbourhoodScout}
+                  color="bg-violet-400"
+                />
+                <ScoreCard
+                  title="Commute reality"
+                  metric={report.scores.commuteReality}
+                  color="bg-amber-400"
+                />
               </div>
+            </DashboardSection>
 
-              <div className="pt-4 border-t border-slate-800 text-xs text-slate-400 flex flex-col sm:flex-row justify-between gap-2">
-                <span>
-                  Walking Difficulty: <strong>{report.walkability.comfortRating}</strong> (~{report.walkability.estimatedMinutes} min walk)
-                </span>
-                <span>
-                  Temperature: <strong>{report.climate.temperature}°C</strong> (Feels like {report.climate.feelsLike}°C)
-                </span>
+            <DashboardSection
+              eyebrow="Everyday access"
+              title="Civic amenities"
+              description="Mapped places inside the selected radius. Counts reflect OpenStreetMap tagging and may be incomplete."
+            >
+              <article className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+                {report.amenities ? (
+                  <div className="grid gap-x-8 gap-y-4 md:grid-cols-2">
+                    {amenityEntries.map(([key, count]) => (
+                      <div key={key} className="space-y-1.5">
+                        <div className="flex justify-between gap-4 text-sm">
+                          <span className="text-slate-300">{amenityLabels[key]}</span>
+                          <span className="font-medium tabular-nums text-white">{count}</span>
+                        </div>
+                        <div
+                          className="h-1.5 overflow-hidden rounded-full bg-slate-800"
+                          role="img"
+                          aria-label={`${amenityLabels[key]}: ${count} mapped`}
+                        >
+                          <div
+                            className="h-full rounded-full bg-sky-500"
+                            style={{ width: `${(count / maxAmenityCount) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="rounded-xl border border-amber-900/60 bg-amber-950/20 p-4 text-sm text-amber-200">
+                    Map data is currently unavailable. Amenity counts are not assumed to be zero.
+                  </p>
+                )}
+              </article>
+            </DashboardSection>
+
+            <DashboardSection
+              eyebrow="Digital services"
+              title="App availability"
+              description="Coverage can depend on the exact address, time, inventory, and account."
+            >
+              <div className="grid gap-4 md:grid-cols-3">
+                {report.digitalServices.map((service, index) => (
+                  <article
+                    key={service.category}
+                    className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-xs text-slate-500">0{index + 1} · Service category</p>
+                        <h4 className="mt-1 font-semibold text-white">{service.category}</h4>
+                      </div>
+                      <span className="rounded-full border border-amber-800/70 bg-amber-950/40 px-2.5 py-1 text-[10px] font-medium uppercase tracking-wide text-amber-300">
+                        Not verified
+                      </span>
+                    </div>
+                    <p className="mt-4 text-sm leading-relaxed text-slate-400">
+                      {service.details}
+                    </p>
+                  </article>
+                ))}
               </div>
-            </div>
+            </DashboardSection>
+
+            <DashboardSection
+              eyebrow="Local conditions"
+              title="Environment & weather"
+              description="Current modeled conditions for the report coordinates; these are not local sensor readings."
+            >
+              <div className="grid gap-4 lg:grid-cols-2">
+                <article className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+                  <p className="text-sm font-medium text-slate-300">Temperature & precipitation</p>
+                  {report.weather ? (
+                    <div className="mt-5 grid grid-cols-2 gap-4">
+                      {[
+                        ["Temperature", report.weather.temperatureC, "°C"],
+                        ["Feels like", report.weather.feelsLikeC, "°C"],
+                        ["Current precipitation", report.weather.precipitationMm, "mm"],
+                        ["7-day forecast rain", report.weather.sevenDayRainfallMm, "mm"],
+                      ].map(([label, value, unit]) => (
+                        <div key={String(label)} className="rounded-xl bg-slate-950/70 p-4">
+                          <p className="text-xs text-slate-500">{label}</p>
+                          <p className="mt-2 text-2xl font-semibold tabular-nums text-white">
+                            {value ?? "—"}
+                            <span className="ml-1 text-sm font-normal text-slate-500">{unit}</span>
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-sm text-amber-300">Weather data is unavailable.</p>
+                  )}
+                </article>
+                <article className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-slate-300">Air quality (modeled)</p>
+                      <p className="mt-1 text-xs text-slate-500">US AQI scale · 0–500</p>
+                    </div>
+                    <p className="text-3xl font-semibold tabular-nums text-white">
+                      {report.airQuality?.usAqi ?? "—"}
+                    </p>
+                  </div>
+                  <div
+                    className="mt-6 h-2 overflow-hidden rounded-full bg-gradient-to-r from-emerald-400 via-yellow-400 via-orange-400 to-red-500"
+                    role="img"
+                    aria-label={
+                      report.airQuality?.usAqi == null
+                        ? "Air quality index unavailable"
+                        : `US air quality index ${report.airQuality.usAqi} out of 500`
+                    }
+                  >
+                    {report.airQuality?.usAqi != null && (
+                      <div
+                        className="relative h-full"
+                        style={{ width: `${Math.max(1, (report.airQuality.usAqi / 500) * 100)}%` }}
+                      >
+                        <span className="absolute right-0 top-1/2 h-4 w-1 -translate-y-1/2 rounded bg-white shadow" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
+                    <p className="rounded-xl bg-slate-950/70 p-3 text-slate-400">
+                      European AQI
+                      <strong className="mt-1 block text-lg text-white">
+                        {report.airQuality?.europeanAqi ?? "—"}
+                      </strong>
+                    </p>
+                    <p className="rounded-xl bg-slate-950/70 p-3 text-slate-400">
+                      PM2.5
+                      <strong className="mt-1 block text-lg text-white">
+                        {report.airQuality?.pm25 ?? "—"} <span className="text-xs font-normal">µg/m³</span>
+                      </strong>
+                    </p>
+                  </div>
+                  <p className="mt-4 text-xs leading-relaxed text-slate-500">
+                    Modeled estimates via Open-Meteo; not measurements from a local ground sensor.
+                  </p>
+                </article>
+              </div>
+            </DashboardSection>
+
+            <DashboardSection
+              eyebrow="On foot"
+              title="Walking access"
+              description="Walking-network routes where available. Typical route duration is not adjusted for weather, heat, or unrecorded obstacles."
+            >
+              <article className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+                {report.walkingRoutes.length > 0 ? (
+                  <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {report.walkingRoutes.map((route) => (
+                      <li
+                        key={route.category}
+                        className="rounded-xl border border-slate-800 bg-slate-950/70 p-4"
+                      >
+                        <p className="text-xs capitalize text-slate-500">Best routed {route.category}</p>
+                        <p className="mt-1 truncate font-medium text-white">{route.name}</p>
+                        <p className="mt-3 text-lg font-semibold text-sky-300">
+                          {route.distanceKm.toFixed(2)} km
+                          <span className="ml-2 text-sm font-normal text-slate-500">
+                            · {route.typicalMinutes} min
+                          </span>
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-amber-300">Walking routes are unavailable.</p>
+                )}
+                <p className="mt-4 border-t border-slate-800 pt-4 text-sm text-slate-300">
+                  Nearest mapped main road:{" "}
+                  {report.nearestMainRoad
+                    ? `${report.nearestMainRoad.name}, ${report.nearestMainRoad.distanceKm.toFixed(2)} km walking`
+                    : "unavailable"}
+                </p>
+              </article>
+            </DashboardSection>
+
+            <DashboardSection
+              eyebrow="Methodology"
+              title="Data quality & sources"
+              description="Review the limitations and data-provider status before relying on this report."
+            >
+              <div className="grid gap-4 lg:grid-cols-2">
+                <article className="rounded-2xl border border-amber-900/60 bg-amber-950/20 p-5">
+                  <h4 className="font-semibold text-amber-200">Important data gaps</h4>
+                  <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-300">
+                    {report.dataGaps.map((gap) => <li key={gap}>{gap}</li>)}
+                  </ul>
+                </article>
+                <article className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+                  <h4 className="font-semibold text-white">Sources & status</h4>
+                  <ul className="mt-3 space-y-4">
+                    {report.sources.map((source) => (
+                      <li key={source.name} className="border-b border-slate-800 pb-3 last:border-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <a
+                            href={source.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-sm font-medium text-sky-400 underline underline-offset-2"
+                          >
+                            {source.name}
+                          </a>
+                          <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-wider text-slate-400">
+                            {source.status}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs leading-relaxed text-slate-500">{source.details}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </article>
+              </div>
+            </DashboardSection>
           </div>
         )}
       </div>
